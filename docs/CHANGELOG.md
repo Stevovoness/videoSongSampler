@@ -4,6 +4,8 @@ Every change gets a line here (see the workflow in [CLAUDE.md](../CLAUDE.md)). N
 **Unreleased** until a version is released.
 
 ## Unreleased
+- `build_exe.py` empties `release/` and `installer/Output/` first, so leftovers from an interrupted build can't be
+  published alongside the new files.
 
 ## 1.3.1
 - **Much faster previews.** "Listen with my clips" in Step 2 plays just the first 15 seconds by default (choose

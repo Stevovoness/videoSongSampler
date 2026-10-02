@@ -47,6 +47,9 @@ def main() -> None:
 
     out = ROOT / "release"
     out.mkdir(exist_ok=True)
+    # leftovers (e.g. a half-written installer from an interrupted build) must never end up in a release
+    for old in list(out.iterdir()) + list((ROOT / "installer" / "Output").glob("*.exe")):
+        old.unlink()
     zip_base = out / f"VideoSampler-{__version__}-Windows-portable"
     print(f"Zipping {zip_base}.zip")
     shutil.make_archive(str(zip_base), "zip", dist, "VideoSampler")
