@@ -48,17 +48,28 @@ def store_audio(path: str, audio: np.ndarray) -> None:
         _audio_cache[path] = audio
 
 
+def _trimmed(slot: ClipSlot) -> tuple[np.ndarray, float, float]:
+    audio = get_audio(slot.path)
+    total = audio.shape[1] / SR
+    t0 = max(0.0, min(slot.trim_start, total - 0.02))
+    t1 = total if slot.trim_end is None else max(t0 + 0.02, min(slot.trim_end, total))
+    return audio[:, int(t0 * SR): int(t1 * SR)], t0, t1
+
+
+def trimmed_audio(slot: ClipSlot) -> np.ndarray:
+    """Just the trimmed sound of a clip (no video frames decoded)."""
+    with _lock:
+        src = _sources.get(source_key(slot))
+    return src.audio if src is not None else np.ascontiguousarray(_trimmed(slot)[0])
+
+
 def get_source(slot: ClipSlot) -> ClipSource:
     key = source_key(slot)
     with _lock:
         src = _sources.get(key)
     if src is not None:
         return src
-    audio = get_audio(slot.path)
-    total = audio.shape[1] / SR
-    t0 = max(0.0, min(slot.trim_start, total - 0.02))
-    t1 = total if slot.trim_end is None else max(t0 + 0.02, min(slot.trim_end, total))
-    seg = audio[:, int(t0 * SR): int(t1 * SR)]
+    seg, t0, t1 = _trimmed(slot)
     frames = ClipFrames(slot.path, t0, t1 + 0.1)
     src = ClipSource(key, np.ascontiguousarray(seg), frames, t0, seg.shape[1] / SR)
     with _lock:

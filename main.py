@@ -60,6 +60,18 @@ def main() -> int:
     if len(sys.argv) == 4 and sys.argv[1] == "--render":
         return cli_render(sys.argv[2], sys.argv[3])
     os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
+    try:
+        import PySide6  # noqa: F401
+    except ImportError:
+        here = os.path.dirname(os.path.abspath(__file__))
+        venv = os.path.join(here, ".venv", "Scripts", "python.exe")
+        print(f"This Python ({sys.version.split()[0]}, {sys.executable}) doesn't have Video Sampler's packages.\n"
+              + (f"Run it with the project's environment instead:\n  \"{venv}\" main.py\n" if os.path.exists(venv) else
+                 "Set up the environment first (see 'From source' in README.md):\n"
+                 "  py -3.11 -m venv .venv\n  .venv\\Scripts\\pip install -r requirements.txt\n"
+                 "  .venv\\Scripts\\pip install --no-deps basic-pitch==0.4.0\n"),
+              file=sys.stderr)
+        return 1
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
 

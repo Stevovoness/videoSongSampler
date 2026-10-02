@@ -97,7 +97,7 @@ class OutputTab(QWidget):
         crow.addWidget(self.hl)
         crow.addStretch(1)
         form.addRow("Colours", crow)
-        self.labels = QCheckBox("Show note names on the tiles")
+        self.labels = QCheckBox("Show note / drum names on the tiles")
         form.addRow("", self.labels)
         self.idle = QComboBox()
         self.idle.addItem("Dimmed still picture", "dim")
@@ -243,9 +243,14 @@ class OutputTab(QWidget):
         else:
             used = len({i.slot for i in plan.instances})
             dur = max(i.start + i.duration for i in plan.instances)
-            txt = f"{len(plan.instances)} notes · {used} clips · {int(dur) // 60}:{int(dur) % 60:02d} long"
+            n_notes, n_drums = len(plan.note_instances), len(plan.drum_instances)
+            txt = f"{n_notes} notes"
+            if n_drums:
+                txt += f" · {n_drums} drum hit{'s' if n_drums != 1 else ''}"
+            txt += f" · {used} clips · {int(dur) // 60}:{int(dur) % 60:02d} long"
             if plan.total_missing:
-                txt += f" · ⚠ {plan.total_missing} notes have no clip and will be silent"
+                n = plan.total_missing
+                txt += f" · ⚠ {n} note{'s' if n != 1 else ''} {'have' if n != 1 else 'has'} no clip and will be silent"
             self.summary.setText(txt)
 
     def browse(self) -> None:
@@ -258,7 +263,7 @@ class OutputTab(QWidget):
 
     # ------------------------------------------------------------------ preview
     def update_preview(self) -> None:
-        if not self.state.song or not self.state.project.slots:
+        if not self.state.song or not (self.state.project.slots or self.state.project.drum_slots):
             return
         song = self.state.song
         t = (song.duration * 100 / max(1, self.state.project.song.tempo_pct)) * self.t_slider.value() / 1000

@@ -15,6 +15,25 @@ Turn short video clips of single notes into a whole song, with a collage music v
    - **Collage grid**: every clip has a tile, and a tile lights up and plays when its note sounds.
    - **Only who's singing**: the screen splits between whichever clips are sounding right now.
 
+### Drums
+Switch Step 1 to **🥁 Drums** to put percussive clips (slaps, claps, smacks, knocks…) on drum pads, one per drum
+sound: kick, snare, hi-hat, toms, cymbals and the rest of the General MIDI kit. When a song has a drum part (a MIDI
+channel-10 track, or a percussion part in MusicXML sheet music), its hits play your drum clips. Drum clips play
+exactly as recorded: no auto-tune, no stretching. If the song uses a drum sound you have no clip for, a similar clip
+can stand in (e.g. your crash for a ride cymbal). Drum tracks are switched on automatically once you've added a drum
+clip, and the collage tiles are labelled with the drum name.
+
+### Play your clips like an instrument
+Click any key or pad to hear it exactly as it will sound in the video (trimmed, tuned and levelled), while the
+clip's picture plays alongside. Or play with your computer keyboard:
+- **Notes:** `A W S E D F T G Y H U J K O L P ;` play C up to the E an octave and a half above. `Z` / `X` move down / up an octave.
+- **Drum pads:** `1 2 3 4`, `Q W E R`, `A S D F`, `Z X C V` play the 16 main pads.
+
+### Octave jump
+Song goes higher or lower than your clips? Tick **Octave jump** in Step 2 and a note with no clip plays the same
+note from a clip one octave (or more) higher or lower, with no pitch-shifting, so it sounds natural. Octave-jumped
+notes are shown in blue. Octave jump is tried before the nearest-clip pitch-shift option.
+
 ### Even volumes
 While analysing each clip, the app measures how loud it is (only over the part where there's actually sound,
 so a short squeal followed by silence measures correctly). When rendering, every clip is brought to the same
@@ -52,6 +71,9 @@ py -3.11 -m venv .venv
 .venv\Scripts\python setup_tools.py      # downloads Rubber Band + Audiveris into tools/
 .venv\Scripts\python main.py
 ```
+Always run it with the `.venv` Python, as above. In VS Code, `.vscode/settings.json` already selects it for the
+Run button. A plain `python main.py` uses whichever Python is installed system-wide, which won't have the app's
+packages.
 
 ## Build a release
 ```
@@ -67,6 +89,13 @@ To publish, attach both files to a GitHub release:
 gh release create v<version> release\* --title "Video Sampler <version>" --notes "..."
 ```
 
+## Documentation
+- [docs/architecture.md](docs/architecture.md): how the code fits together
+- [docs/releasing.md](docs/releasing.md): building and publishing a release
+- [docs/CHANGELOG.md](docs/CHANGELOG.md): what changed in each version
+- [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md): rules for AI agents. **After every change: run the tests,
+  update the docs and changelog, then commit and push to git.**
+
 ## Tests
 ```
 .venv\Scripts\python -m pytest tests
@@ -78,9 +107,10 @@ gh release create v<version> release\* --title "Video Sampler <version>" --notes
 | `vsampler/clips.py` | Decodes clips, detects pitch (pYIN), auto-trims silence, stores frames |
 | `vsampler/audio_dsp.py` | Stretches notes without changing pitch and pitch-shifts them (Rubber Band, librosa fallback) |
 | `vsampler/importers/` | MIDI, MusicXML, audio (basic-pitch) and sheet-music (Audiveris) importers |
-| `vsampler/planner.py` | Maps song notes to clips: missing notes and nearest-clip borrowing |
+| `vsampler/planner.py` | Maps song notes and drum hits to clips: octave jumps, nearest-clip borrowing, drum stand-ins |
+| `vsampler/drums.py` | General MIDI drum names, the drum pad layout and drum families |
 | `vsampler/render/` | Collage layouts, frame compositor, MP4 encoder (PyAV / x264 + AAC) |
-| `vsampler/gui/` | PySide6 interface |
+| `vsampler/gui/` | PySide6 interface (piano keyboard, drum pads, low-latency sample pad) |
 
 ## Licences
 Bundled third-party tools, redistributed unmodified:

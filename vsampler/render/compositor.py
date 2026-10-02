@@ -8,6 +8,7 @@ import numpy as np
 
 from ..audio_dsp import time_map
 from ..models import RenderSettings
+from ..drums import slot_label
 from ..notes import midi_to_name
 from ..planner import NoteInstance
 from .layouts import cover, draw_label, fit_grid, hex_to_bgr
@@ -54,6 +55,10 @@ class Compositor:
         slow = inst.duration > src.length * 1.2
         return src.frames.at(src_t, blend=self.s.smooth_slowmo and slow)
 
+    @staticmethod
+    def _label(inst: NoteInstance) -> str:
+        return slot_label(inst.slot) if inst.drum else midi_to_name(inst.target)
+
     def _border(self, img: np.ndarray, x: int, y: int, w: int, h: int) -> None:
         th = max(3, h // 35)
         cv2.rectangle(img, (x + th // 2, y + th // 2), (x + w - 1 - th // 2, y + h - 1 - th // 2), self.hl, th)
@@ -71,7 +76,7 @@ class Compositor:
                 tile = np.full((h, w, 3), [int(c * 0.6 + 12) for c in self.bg], np.uint8)
             base[y:y + h, x:x + w] = tile
             if self.s.show_labels:
-                draw_label(base, midi_to_name(slot), x, y, h, None)
+                draw_label(base, slot_label(slot), x, y, h, None)
         self.base = base
 
     def _grid(self, t: float) -> np.ndarray:
@@ -83,7 +88,7 @@ class Compositor:
             img[y:y + h, x:x + w] = cover(self._clip_frame(inst, t), w, h)
             self._border(img, x, y, w, h)
             if self.s.show_labels:
-                draw_label(img, midi_to_name(inst.target), x, y, h, self.hl)
+                draw_label(img, self._label(inst), x, y, h, self.hl)
         return img
 
     # ------------------------------------------------------------------ dynamic
@@ -95,7 +100,7 @@ class Compositor:
             img = np.zeros((self.H, self.W, 3), np.uint8)
             img[:] = self.bg
             return img
-        insts = sorted(active.values(), key=lambda i: i.target)
+        insts = sorted(active.values(), key=lambda i: (i.drum, i.target))
         n = len(insts)
         if n not in self._dyn_rects:
             gap = 0 if n == 1 else 6
@@ -105,7 +110,7 @@ class Compositor:
         for inst, (x, y, w, h) in zip(insts, self._dyn_rects[n]):
             img[y:y + h, x:x + w] = cover(self._clip_frame(inst, t), w, h)
             if self.s.show_labels:
-                draw_label(img, midi_to_name(inst.target), x, y, h, self.hl)
+                draw_label(img, self._label(inst), x, y, h, self.hl)
         self._last = img
         return img
 

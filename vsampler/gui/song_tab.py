@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (QCheckBox, QDoubleSpinBox, QFileDialog, QFrame, Q
 
 from ..importers import FILE_FILTER, load_song, song_kind
 from ..importers.omr_import import AUDIVERIS_URL, AudiverisMissing
+from ..drums import drum_short
 from ..notes import midi_to_name
 from ..render.renderer import Cancelled, render_audio_preview
 from ..songops import default_tracks, suggest_transpose
@@ -116,6 +117,7 @@ class SongTab(QWidget):
         self.transpose = QSpinBox()
         self.transpose.setRange(-36, 36)
         self.transpose.setSuffix(" semitones")
+        self.transpose.setToolTip("Change the key of the song (drum parts are never transposed)")
         r1.addWidget(self.transpose)
         best = QPushButton("Best fit for my clips")
         best.setToolTip("Find the key change that lets the most notes use your clips directly")
@@ -131,7 +133,7 @@ class SongTab(QWidget):
         r2.addWidget(self.tempo)
         r2.addStretch(1)
         a2.addLayout(r2)
-        self.melody = QCheckBox("Melody only (play just the top note of chords)")
+        self.melody = QCheckBox("Melody only (play just the top note of chords; drums unaffected)")
         a2.addWidget(self.melody)
         a2.addStretch(1)
         mid.addWidget(ab, 3)
@@ -143,20 +145,45 @@ class SongTab(QWidget):
         self.miss_title.setStyleSheet("font-weight:700;")
         self.miss_text = QLabel("")
         self.miss_text.setWordWrap(True)
+        self.octave = QCheckBox("Octave jump: play missing notes from an octave above or below")
+        self.octave.setToolTip(
+            "If a note has no clip, play the same note from a clip one (or more) octaves higher or lower.\n"
+            "Too high for your clips? It drops an octave. Too low? It jumps up an octave.\n"
+            "No pitch-shifting, so it sounds natural. Tried before pitch-shifting.")
+        self.octave_max = QSpinBox()
+        self.octave_max.setRange(1, 4)
+        self.octave_max.setPrefix("up to ")
+        self.octave_max.setSuffix(" octave(s)")
+        orow = QHBoxLayout()
+        orow.addWidget(self.octave, 1)
+        orow.addWidget(self.octave_max)
         self.shift = QCheckBox("Use nearest clip and pitch-shift missing notes")
         self.max_shift = QSpinBox()
         self.max_shift.setRange(1, 24)
         self.max_shift.setPrefix("up to ")
         self.max_shift.setSuffix(" semitones")
+        srow = QHBoxLayout()
+        srow.addWidget(self.shift, 1)
+        srow.addWidget(self.max_shift)
         ml.addWidget(self.miss_title)
         ml.addWidget(self.miss_text, 1)
-        ml.addWidget(self.shift)
-        ml.addWidget(self.max_shift)
+        ml.addLayout(orow)
+        ml.addLayout(srow)
+        self.drum_box = QWidget()
+        dl = QVBoxLayout(self.drum_box)
+        dl.setContentsMargins(0, 6, 0, 0)
+        self.drum_text = QLabel("")
+        self.drum_text.setWordWrap(True)
+        self.standins = QCheckBox("Fill missing drum sounds with a similar drum clip")
+        self.standins.setToolTip("e.g. no ride cymbal clip? Use your crash. No similar clip? Use any drum clip.")
+        dl.addWidget(self.drum_text)
+        dl.addWidget(self.standins)
+        ml.addWidget(self.drum_box)
         mid.addWidget(self.miss, 4)
         root.addLayout(mid)
 
         # ---- piano roll
-        rb = QGroupBox("Song notes   (green = has a clip · amber = borrowed and pitch-shifted · red = missing)")
+        rb = QGroupBox("Song notes   (green = has a clip · blue = octave jump · amber = borrowed / stand-in · red = missing)")
         rl = QVBoxLayout(rb)
         self.roll = PianoRoll()
         rl.addWidget(self.roll, 1)
@@ -176,6 +203,7 @@ class SongTab(QWidget):
 
         for w, sig in ((self.transpose, "valueChanged"), (self.tempo, "valueChanged"), (self.melody, "toggled"),
                        (self.shift, "toggled"), (self.max_shift, "valueChanged"), (self.sens, "valueChanged"),
+                       (self.octave, "toggled"), (self.octave_max, "valueChanged"), (self.standins, "toggled"),
                        (self.min_ms, "valueChanged"), (self.a_melody, "toggled")):
             getattr(w, sig).connect(self._opts_changed)
         state.slots_changed.connect(self.refresh)
@@ -194,6 +222,9 @@ class SongTab(QWidget):
         self.melody.setChecked(o.melody_only)
         self.shift.setChecked(o.allow_pitch_shift)
         self.max_shift.setValue(o.max_shift)
+        self.octave.setChecked(o.octave_jump)
+        self.octave_max.setValue(o.octave_max)
+        self.standins.setChecked(o.drum_standins)
         self.sens.setValue(int(round((1 - o.audio_onset_threshold) * 100)))
         self.min_ms.setValue(int(o.audio_min_note_ms))
         self.a_melody.setChecked(o.audio_melody_only)
@@ -208,6 +239,9 @@ class SongTab(QWidget):
         o.melody_only = self.melody.isChecked()
         o.allow_pitch_shift = self.shift.isChecked()
         o.max_shift = self.max_shift.value()
+        o.octave_jump = self.octave.isChecked()
+        o.octave_max = self.octave_max.value()
+        o.drum_standins = self.standins.isChecked()
         o.audio_onset_threshold = 1 - self.sens.value() / 100
         o.audio_min_note_ms = float(self.min_ms.value())
         o.audio_melody_only = self.a_melody.isChecked()
@@ -307,13 +341,12 @@ class SongTab(QWidget):
         self._loading = True
         self.tracks.clear()
         if song:
-            enabled = self.state.project.song.enabled_tracks
-            if enabled is None:
-                enabled = default_tracks(song)
+            enabled = self._enabled()
             for t in song.tracks:
-                label = f"{t.name}   ·  {t.note_count} notes  ·  {midi_to_name(t.low)}–{midi_to_name(t.high)}"
                 if t.is_drum:
-                    label += "  (drums)"
+                    label = f"🥁  {t.name}   ·  {t.note_count} drum hit{'s' if t.note_count != 1 else ''}  ·  drum pads"
+                else:
+                    label = f"{t.name}   ·  {t.note_count} notes  ·  {midi_to_name(t.low)}–{midi_to_name(t.high)}"
                 it = QListWidgetItem(label)
                 it.setData(Qt.UserRole, t.index)
                 it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
@@ -325,15 +358,35 @@ class SongTab(QWidget):
         self._loading = False
         self.refresh()
 
+    def _enabled(self) -> set[int]:
+        enabled = self.state.project.song.enabled_tracks
+        if enabled is None:
+            enabled = default_tracks(self.state.song, bool(self.state.project.drum_slots))
+        return set(enabled)
+
+    def _sync_track_checks(self) -> None:
+        """Default track choice changes when drum clips are added - keep the ticks in step."""
+        if self.state.song is None or self.state.project.song.enabled_tracks is not None:
+            return
+        enabled = self._enabled()
+        self._loading = True
+        for i in range(self.tracks.count()):
+            it = self.tracks.item(i)
+            it.setCheckState(Qt.Checked if it.data(Qt.UserRole) in enabled else Qt.Unchecked)
+        self._loading = False
+
     def refresh(self) -> None:
+        self._sync_track_checks()
         evs = self.state.events()
         plan = self.state.plan()
-        exact = plan.exact if plan else set()
-        borrowed = set(plan.borrowed) if plan else set()
-        self.roll.set_events(evs, exact, borrowed)
+        self.roll.set_events(evs, plan)
         self.preview_btn.setEnabled(bool(plan and plan.instances))
         o = self.state.project.song
         self.max_shift.setEnabled(o.allow_pitch_shift)
+        self.octave_max.setEnabled(o.octave_jump)
+        self._refresh_drums(evs, plan)
+        evs = [e for e in evs if not e.drum]
+        exact = plan.exact if plan else set()
         if not self.state.song:
             self.miss.setProperty("good", True)
             self.miss.setProperty("warn", False)
@@ -343,28 +396,72 @@ class SongTab(QWidget):
             needed = sorted({e.pitch for e in evs})
             no_clip = [p for p in needed if p not in exact]
             unresolved = sorted(plan.missing)
-            warn = bool(unresolved)
+            warn = bool(unresolved) or bool(plan.drum_missing)
             self.miss.setProperty("warn", warn)
             self.miss.setProperty("good", not warn)
-            if not no_clip:
+            if not needed:
+                self.miss_title.setText("Drums only")
+                self.miss_text.setText("The parts you picked only have drums.")
+            elif not no_clip:
                 self.miss_title.setText("✔  Every note has a clip!")
                 self.miss_text.setText(f"The song uses {len(needed)} different notes and you have all of them.")
             elif unresolved:
+                silent = sum(plan.missing.values())
                 self.miss_title.setText(f"⚠  {len(unresolved)} note{'s' if len(unresolved) > 1 else ''} "
                                         f"{'have' if len(unresolved) > 1 else 'has'} no clip "
-                                        f"({plan.total_missing} note{'s' if plan.total_missing != 1 else ''} will be silent)")
+                                        f"({silent} note{'s' if silent != 1 else ''} will be silent)")
                 names = ", ".join(midi_to_name(p) for p in unresolved)
                 txt = f"Missing: <b>{names}</b>.<br>Add clips for these in Step 1"
-                txt += " or tick the box below to borrow the nearest clip." if not o.allow_pitch_shift else \
+                if not o.octave_jump:
+                    txt += ", tick “Octave jump” to use the same note from another octave"
+                txt += ", or tick the pitch-shift box to borrow the nearest clip." if not o.allow_pitch_shift else \
                     ", or allow a bigger pitch-shift range."
+                txt += self._covered_text(plan)
                 self.miss_text.setText(txt)
             else:
-                self.miss_title.setText("✔  All notes covered (some borrowed)")
-                pairs = ", ".join(f"{midi_to_name(p)}←{midi_to_name(s)}" for p, s in sorted(plan.borrowed.items()))
-                self.miss_text.setText(f"Pitch-shifted from the nearest clip: {pairs}")
+                self.miss_title.setText("✔  All notes covered (some from other clips)")
+                self.miss_text.setText(self._covered_text(plan).removeprefix("<br>"))
             for w in (self.miss,):
                 w.style().unpolish(w)
                 w.style().polish(w)
+
+    @staticmethod
+    def _covered_text(plan) -> str:
+        txt = ""
+        if plan.octave:
+            pairs = ", ".join(f"{midi_to_name(p)}→{midi_to_name(s)}" for p, s in sorted(plan.octave.items()))
+            txt += f"<br><span style='color:{theme.OCTAVE}'>Octave jump:</span> {pairs}"
+        if plan.borrowed:
+            pairs = ", ".join(f"{midi_to_name(p)}←{midi_to_name(s)}" for p, s in sorted(plan.borrowed.items()))
+            txt += f"<br>Pitch-shifted from the nearest clip: {pairs}"
+        return txt
+
+    def _refresh_drums(self, evs, plan) -> None:
+        song = self.state.song
+        has_drum_tracks = bool(song and any(t.is_drum for t in song.tracks))
+        drum_evs = [e for e in evs if e.drum]
+        self.drum_box.setVisible(has_drum_tracks)
+        if not has_drum_tracks:
+            return
+        if not drum_evs:
+            if self.state.project.drum_slots:
+                self.drum_text.setText("🥁 <b>Drums:</b> the drum part is switched off (tick it in the list).")
+            else:
+                self.drum_text.setText("🥁 <b>Drums:</b> this song has a drum part. Add slap / clap / smack clips "
+                                       "in Step 1 (🥁 Drums) and it will play on your drum pads.")
+            return
+        needed = sorted({e.pitch for e in drum_evs})
+        have = [n for n in needed if n in plan.drum_exact]
+        txt = f"🥁 <b>Drums:</b> {len(have)} of {len(needed)} drum sounds have a clip."
+        if plan.drum_standin:
+            txt += " Stand-ins: " + ", ".join(f"{drum_short(n)}←{drum_short(s)}"
+                                              for n, s in sorted(plan.drum_standin.items())) + "."
+        if plan.drum_missing:
+            txt += (f" <span style='color:{theme.BAD}'>Silent: "
+                    + ", ".join(drum_short(n) for n in sorted(plan.drum_missing)) + "</span>")
+            if not self.state.project.drum_slots:
+                txt += " — add drum clips in Step 1 (🥁 Drums)."
+        self.drum_text.setText(txt)
 
     def best_fit(self) -> None:
         if not self.state.song:

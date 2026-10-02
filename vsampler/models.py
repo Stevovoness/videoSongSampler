@@ -32,6 +32,7 @@ class NoteEvent:
     pitch: int        # MIDI number
     velocity: float = 1.0  # 0..1
     track: int = 0
+    drum: bool = False     # pitch is a General MIDI drum sound, played on a drum pad
 
     @property
     def duration(self) -> float:
@@ -62,12 +63,15 @@ class Song:
 
 @dataclass
 class SongOptions:
-    enabled_tracks: list[int] | None = None   # None = all non-drum tracks
+    enabled_tracks: list[int] | None = None   # None = all tracks (drum tracks only if there are drum clips)
     transpose: int = 0
     tempo_pct: float = 100.0
     melody_only: bool = False
+    octave_jump: bool = False                # play missing notes from a clip an octave up / down
+    octave_max: int = 2
     allow_pitch_shift: bool = False          # use nearest clip for missing notes
     max_shift: int = 12
+    drum_standins: bool = True               # missing drum sounds borrow a similar drum clip
     # audio-import options
     audio_onset_threshold: float = 0.5
     audio_min_note_ms: float = 120.0
@@ -96,6 +100,7 @@ class RenderSettings:
 @dataclass
 class Project:
     slots: dict[int, ClipSlot] = field(default_factory=dict)
+    drum_slots: dict[int, ClipSlot] = field(default_factory=dict)   # GM drum note -> clip
     song_path: str = ""
     song: SongOptions = field(default_factory=SongOptions)
     render: RenderSettings = field(default_factory=RenderSettings)
@@ -103,8 +108,9 @@ class Project:
 
     def to_json(self) -> str:
         d = {
-            "version": 1,
+            "version": 2,
             "slots": {str(k): asdict(v) for k, v in self.slots.items()},
+            "drum_slots": {str(k): asdict(v) for k, v in self.drum_slots.items()},
             "song_path": self.song_path,
             "song": asdict(self.song),
             "render": asdict(self.render),
@@ -117,6 +123,7 @@ class Project:
         d = json.loads(text)
         p = cls()
         p.slots = {int(k): ClipSlot(**v) for k, v in d.get("slots", {}).items()}
+        p.drum_slots = {int(k): ClipSlot(**v) for k, v in d.get("drum_slots", {}).items()}
         p.song_path = d.get("song_path", "")
         p.song = SongOptions(**{k: v for k, v in d.get("song", {}).items() if k in SongOptions.__dataclass_fields__})
         p.render = RenderSettings(**{k: v for k, v in d.get("render", {}).items() if k in RenderSettings.__dataclass_fields__})

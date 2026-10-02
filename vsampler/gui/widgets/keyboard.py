@@ -1,7 +1,7 @@
 """Clickable piano keyboard where each key is a clip slot. Accepts dropped video files."""
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QToolTip, QWidget
 
@@ -21,7 +21,11 @@ class PianoKeyboard(QWidget):
         self.assigned: set[int] = set()
         self.needed: set[int] = set()
         self.borrowed: set[int] = set()
+        self.octave: set[int] = set()
+        self.letters: dict[int, str] = {}          # computer-keyboard key that plays each note
+        self.describe = None                       # optional fn(midi) -> what the key plays (tooltip)
         self.selected: int | None = None
+        self._lit: set[int] = set()
         self._hover: int | None = None
         self._drop: int | None = None
         self.setMouseTracking(True)
@@ -36,13 +40,29 @@ class PianoKeyboard(QWidget):
         self.lo, self.hi = lo, hi
         self.update()
 
-    def set_state(self, assigned: set[int], needed: set[int], borrowed: set[int]) -> None:
-        self.assigned, self.needed, self.borrowed = assigned, needed, borrowed
+    def set_state(self, assigned: set[int], needed: set[int], borrowed: set[int],
+                  octave: set[int] = frozenset()) -> None:
+        self.assigned, self.needed, self.borrowed, self.octave = assigned, needed, borrowed, set(octave)
+        self.update()
+
+    def set_letters(self, letters: dict[int, str]) -> None:
+        self.letters = letters
         self.update()
 
     def select(self, midi: int | None) -> None:
         self.selected = midi
         self.update()
+
+    def flash(self, midi: int, ms: int = 220) -> None:
+        """Show a key as pressed for a moment (it's being played)."""
+        self._lit.add(midi)
+        self.update()
+
+        def off():
+            self._lit.discard(midi)
+            self.update()
+
+        QTimer.singleShot(ms, off)
 
     # ------------------------------------------------------------ geometry
     def _whites(self) -> list[int]:
@@ -89,13 +109,17 @@ class PianoKeyboard(QWidget):
                 fill = QColor("#f4f4f6") if not black else QColor("#1b1c20")
             if m == self._hover or m == self._drop:
                 fill = fill.lighter(125) if black or m in self.assigned else QColor("#ffe7b3")
+            if m in self._lit:
+                fill = QColor(theme.ACCENT)
             p.setPen(QPen(QColor("#0c0c0e"), 1))
             p.setBrush(fill)
             p.drawRoundedRect(r.adjusted(0.5, 0, -0.5, 0), 4, 4)
-            # status marker: red = song needs it but no clip, orange = borrowed, dot = needed+have
+            # status marker: red = needed, no clip · blue = octave jump · amber = borrowed · accent = needed + have
             if m in self.needed:
                 if m in self.assigned:
                     color = QColor(theme.ACCENT)
+                elif m in self.octave:
+                    color = QColor(theme.OCTAVE)
                 elif m in self.borrowed:
                     color = QColor(theme.WARN)
                 else:
@@ -118,6 +142,15 @@ class PianoKeyboard(QWidget):
                 p.setPen(QColor("#ffffff") if light else QColor("#333"))
                 name = midi_to_name(m)
                 p.drawText(r.adjusted(0, 0, 0, -6), Qt.AlignHCenter | Qt.AlignBottom, name)
+            # computer-keyboard letter that plays this key
+            letter = self.letters.get(m)
+            if letter:
+                f.setPointSizeF(max(6.5, min(8.5, r.width() / 4.5)))
+                f.setBold(True)
+                p.setFont(f)
+                p.setPen(QColor(theme.ACCENT) if black or m in self.assigned else QColor("#8a6400"))
+                ly = r.top() + (r.height() * 0.30 if black else r.height() * 0.62)
+                p.drawText(QRectF(r.left(), ly, r.width(), 16), Qt.AlignHCenter | Qt.AlignTop, letter)
         p.end()
 
     # ------------------------------------------------------------ interaction
@@ -127,9 +160,12 @@ class PianoKeyboard(QWidget):
             self._hover = k
             self.update()
             if k is not None:
-                status = "clip loaded" if k in self.assigned else "no clip yet — click or drop a video"
+                status = self.describe(k) if self.describe else (
+                    "clip loaded" if k in self.assigned else "no clip yet — click or drop a video")
                 if k in self.needed and k not in self.assigned:
                     status += " (the song needs this note!)"
+                if k in self.letters:
+                    status += f"   ·   key: {self.letters[k]}"
                 QToolTip.showText(e.globalPosition().toPoint(), f"{pretty_name(k)}: {status}", self)
 
     def leaveEvent(self, _e) -> None:

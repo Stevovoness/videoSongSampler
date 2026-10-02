@@ -204,3 +204,128 @@ def test_render_evens_volumes(tmp_path):
         sources.forget(quiet)
     assert abs(a_off - b_off) > 15          # without levelling: very different
     assert abs(a_on - b_on) < 2             # with levelling: about the same
+
+
+# ---------------------------------------------------------------- octave jump
+from vsampler.drums import drum_key  # noqa: E402
+from vsampler.models import Song, Track  # noqa: E402
+from vsampler.planner import resolve, resolve_drum  # noqa: E402
+
+
+def test_octave_jump():
+    s = slots(60, 64)
+    r = resolve(72, s, octave_jump=True)
+    assert (r.slot, r.how) == (60, "octave") and abs(r.shift + 0.2) < 1e-9   # plays C4 as-is (only auto-tune)
+    assert resolve(52, s, octave_jump=True).slot == 64                       # too low -> an octave up
+    assert resolve(84, s, octave_jump=True, octave_max=1).how == "missing"
+    assert resolve(84, s, octave_jump=True, octave_max=2).slot == 60
+    assert resolve(60, s, octave_jump=True).how == "exact"
+    assert resolve(76, s, octave_jump=False).how == "missing"
+    # octave jump is tried before pitch-shifting
+    assert resolve(76, s, octave_jump=True, allow_shift=True).how == "octave"
+    r = resolve(70, s, octave_jump=True, allow_shift=True)
+    assert (r.slot, r.how) == (64, "borrowed")
+    p = make_plan([NoteEvent(0, 1, 72), NoteEvent(1, 2, 61)], s, octave_jump=True)
+    assert p.octave == {72: 60} and p.missing == {61: 1}
+    assert p.instances[0].slot == 60 and p.instances[0].target == 72
+
+
+# ---------------------------------------------------------------- drums
+def test_drum_resolution():
+    d = {38: ClipSlot("snare.mp4"), 36: ClipSlot("kick.mp4")}
+    assert resolve_drum(36, d).how == "exact" and resolve_drum(36, d).slot == drum_key(36)
+    assert (resolve_drum(40, d).slot, resolve_drum(40, d).how) == (drum_key(38), "standin")  # same family
+    assert resolve_drum(35, d).slot == drum_key(36)
+    assert resolve_drum(42, d).slot == drum_key(38)          # no hi-hat family clip: nearest drum clip
+    assert resolve_drum(42, d, standins=False).how == "missing"
+    assert resolve_drum(42, {}).how == "missing"
+
+
+def _drum_song():
+    evs = [NoteEvent(0, 1, 60, track=0), NoteEvent(0, 1, 55, track=0), NoteEvent(0, 0.1, 36, track=1, drum=True),
+           NoteEvent(0, 0.1, 38, track=1, drum=True)]
+    return Song("x.mid", "midi", evs, [Track(0, "Lead", 2, 55, 60), Track(1, "Drums", 2, 36, 38, True)])
+
+
+def test_drums_in_song_options():
+    song = _drum_song()
+    opts = SongOptions(transpose=5, melody_only=True)
+    assert [e.pitch for e in apply_options(song, opts)] == [65]               # drums off without drum clips
+    evs = apply_options(song, opts, include_drums=True)
+    assert sorted((e.pitch, e.drum) for e in evs) == [(36, True), (38, True), (65, False)]  # not transposed
+    assert suggest_transpose(song, SongOptions(enabled_tracks=[0, 1]), {60, 55}) == 0
+
+
+def test_plan_with_drums():
+    song = _drum_song()
+    evs = apply_options(song, SongOptions(), include_drums=True)
+    p = make_plan(evs, slots(60, 55), drum_slots={36: ClipSlot("k.mp4", 0.0, 0.4)}, drum_standins=False)
+    assert p.drum_exact == {36} and p.drum_missing == {38: 1}
+    hit = p.drum_instances[0]
+    assert hit.slot == drum_key(36) and hit.shift == 0 and abs(hit.duration - 0.4) < 1e-9   # whole clip, as recorded
+    p = make_plan(evs, slots(60, 55), drum_slots={36: ClipSlot("k.mp4")})
+    assert p.drum_standin == {38: 36} and not p.drum_missing
+
+
+def test_project_json_drums_and_old_files():
+    p = Project()
+    p.slots[60] = ClipSlot("a.mp4")
+    p.drum_slots[38] = ClipSlot("snare.mp4", autotune=False)
+    p.song.octave_jump = True
+    q = Project.from_json(p.to_json())
+    assert q.drum_slots[38].path == "snare.mp4" and not q.drum_slots[38].autotune and q.song.octave_jump
+    old = Project.from_json('{"version": 1, "slots": {"60": {"path": "a.mp4"}}, "song": {"transpose": 2}}')
+    assert old.drum_slots == {} and old.song.transpose == 2 and not old.song.octave_jump
+
+
+def test_render_with_drums(media):
+    from vsampler.render.renderer import prepare, render_slot_audio
+    d, clips, mid = media
+    proj = Project()
+    for m, path in clips.items():
+        a, _ = analyze_clip(path)
+        proj.slots[m] = ClipSlot(path, a.trim_start, a.trim_end, a.detected_midi)
+    a, _ = analyze_clip(clips[67], detect=False)
+    assert a.detected_midi is None
+    proj.drum_slots[36] = ClipSlot(clips[67], a.trim_start, a.trim_end, autotune=False)
+    proj.render.width, proj.render.height = 320, 180
+    song = load_song(mid, proj.song)
+    prep = prepare(proj, song)
+    hits = prep.plan.drum_instances
+    assert len(hits) == 1 and hits[0].slot == drum_key(36)
+    assert abs(hits[0].duration - prep.sources[drum_key(36)].length) < 1e-9   # never stretched or cut
+    out = str(d / "out_drums.mp4")
+    render_video(proj, song, out)
+    with av.open(out) as c:
+        assert sorted(s.type for s in c.streams) == ["audio", "video"]
+    # the sample pad hears exactly the trimmed clip
+    y = render_slot_audio(proj, drum_key(36))
+    assert y.shape[0] == 2 and abs(y.shape[1] / SR - (a.trim_end - a.trim_start)) < 0.01
+    assert render_slot_audio(proj, 64, proj.slots[64].autotune_shift(64)).shape[0] == 2
+
+
+def test_musicxml_percussion_part(tmp_path):
+    from music21 import clef, instrument, note, stream, tempo
+    s = stream.Score()
+    lead = stream.Part()
+    lead.partName = "Lead"
+    lead.append(tempo.MetronomeMark(number=120))
+    for n in ("C4", "E4", "G4"):
+        lead.append(note.Note(n, quarterLength=1))
+    drums = stream.Part()
+    drums.partName = "Drums"
+    drums.insert(0, instrument.SnareDrum())
+    drums.append(clef.PercussionClef())
+    for _ in range(3):
+        u = note.Unpitched(quarterLength=1)
+        u.displayStep, u.displayOctave = "C", 5
+        drums.append(u)
+    s.append(lead)
+    s.append(drums)
+    path = tmp_path / "perc.musicxml"
+    s.write("musicxml", fp=str(path))
+    song = load_song(str(path), SongOptions())
+    assert [t.is_drum for t in song.tracks] == [False, True]
+    drum_evs = [e for e in song.events if e.drum]
+    assert len(drum_evs) == 3
+    assert [e.pitch for e in apply_options(song, SongOptions())] == [60, 64, 67]

@@ -155,12 +155,12 @@ def grab_frame(path: str, t: float, max_side: int = 320) -> np.ndarray | None:
     return img
 
 
-def analyze_clip(path: str) -> tuple[ClipAnalysis, np.ndarray]:
-    """Full analysis of a clip. Returns (analysis, stereo audio)."""
+def analyze_clip(path: str, detect: bool = True) -> tuple[ClipAnalysis, np.ndarray]:
+    """Full analysis of a clip. Returns (analysis, stereo audio). detect=False skips pitch (drum clips)."""
     audio = load_audio(path)
     start, end = auto_trim(audio)
     seg = audio[:, int(start * SR): int(end * SR)]
-    midi, conf = detect_pitch(seg)
+    midi, conf = detect_pitch(seg) if detect else (None, 0.0)
     # thumbnail at the loudest moment
     mono = np.abs(seg).mean(axis=0)
     loud_t = start + (int(np.argmax(mono)) / SR if len(mono) else 0.0)

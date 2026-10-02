@@ -6,7 +6,7 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QImage, QPixmap
 
 from ..models import Project, Song
-from ..planner import Plan, make_plan
+from ..planner import Plan, Resolution, plan_for_project, resolve_drum, resolve_opts
 from ..songops import apply_options
 
 
@@ -37,16 +37,25 @@ class AppState(QObject):
     def events(self):
         if self.song is None:
             return []
-        return apply_options(self.song, self.project.song)
+        return apply_options(self.song, self.project.song, include_drums=bool(self.project.drum_slots))
 
     def plan(self) -> Plan | None:
         if self.song is None:
             return None
-        o = self.project.song
-        return make_plan(self.events(), self.project.slots, o.allow_pitch_shift, o.max_shift)
+        return plan_for_project(self.events(), self.project)
 
     def needed_pitches(self) -> set[int]:
-        return {e.pitch for e in self.events()}
+        return {e.pitch for e in self.events() if not e.drum}
+
+    def needed_drums(self) -> set[int]:
+        return {e.pitch for e in self.events() if e.drum}
+
+    def resolve_key(self, midi: int) -> Resolution:
+        """What a piano key plays - the same clip and shift the video would use for that note."""
+        return resolve_opts(midi, self.project.slots, self.project.song)
+
+    def resolve_pad(self, note: int) -> Resolution:
+        return resolve_drum(note, self.project.drum_slots, self.project.song.drum_standins)
 
     def touch_slots(self) -> None:
         self.dirty = True

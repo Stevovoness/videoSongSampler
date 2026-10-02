@@ -11,11 +11,12 @@ import soundfile as sf
 
 from .. import audio_dsp
 from ..clips import level_gain_db, measure_loudness
-from ..models import Project, Song
-from ..planner import Plan, make_plan
+from ..drums import drum_key, drum_note, is_drum_key
+from ..models import ClipSlot, Project, Song
+from ..planner import Plan, plan_for_project
 from ..songops import apply_options
 from .compositor import Compositor
-from .sources import ClipSource, get_source
+from .sources import ClipSource, get_source, source_key, trimmed_audio
 
 ProgressFn = Callable[[float, str], None]
 
@@ -40,21 +41,58 @@ def _check(cancel: threading.Event | None) -> None:
         raise Cancelled()
 
 
+def project_slot(project: Project, key: int) -> ClipSlot:
+    """The clip behind an engine slot key (piano key, or drum_key(n) for a drum pad)."""
+    return project.drum_slots[drum_note(key)] if is_drum_key(key) else project.slots[key]
+
+
+def all_slot_keys(project: Project) -> list[int]:
+    return sorted(project.slots) + sorted(drum_key(n) for n in project.drum_slots)
+
+
+def slot_gain_db(project: Project, slot: ClipSlot, audio: np.ndarray) -> float:
+    """User volume plus automatic levelling (if on), in dB. `audio` is the trimmed clip sound."""
+    gain_db = slot.gain_db
+    if project.render.even_volumes:
+        slot.loudness_db = measure_loudness(audio)   # of the current trim
+        gain_db += level_gain_db(slot.loudness_db)
+    return gain_db
+
+
+def render_slot_audio(project: Project, key: int, shift: float = 0.0) -> np.ndarray:
+    """One full hit of a clip exactly as the renderer makes it (trim, auto-tune / shift, volume levelling).
+
+    Used by the clickable sample pad.
+    """
+    slot = project_slot(project, key)
+    audio = trimmed_audio(slot)
+    sr = project.render.sample_rate
+    y = audio_dsp.render_note(source_key(slot), audio, sr, audio.shape[1] / sr, shift)
+    y = y * (10 ** (slot_gain_db(project, slot, audio) / 20))
+    peak = float(np.abs(y).max()) if y.size else 0.0
+    if peak > 0.99:
+        y = y * (0.99 / peak)
+    return y.astype(np.float32)
+
+
 def prepare(project: Project, song: Song, progress: ProgressFn = _noop,
             cancel: threading.Event | None = None, all_slots: bool = False) -> Prepared:
-    events = apply_options(song, project.song)
-    plan = make_plan(events, project.slots, project.song.allow_pitch_shift, project.song.max_shift)
+    events = apply_options(song, project.song, include_drums=bool(project.drum_slots))
+    plan = plan_for_project(events, project)
     if not plan.instances:
         raise ValueError("None of the song's notes have a clip. Add clips for the notes shown in red, "
-                         "or turn on 'Use nearest clip and pitch-shift'.")
+                         "or turn on 'Octave jump' / 'Use nearest clip and pitch-shift'.")
     used = sorted({i.slot for i in plan.instances})
     if all_slots or not project.render.only_used_clips:
-        used = sorted(project.slots)
+        used = all_slot_keys(project)
     sources: dict[int, ClipSource] = {}
-    for n, slot in enumerate(used):
+    for n, key in enumerate(used):
         _check(cancel)
         progress(n / max(1, len(used)), f"Loading clip {n + 1} of {len(used)}…")
-        sources[slot] = get_source(project.slots[slot])
+        sources[key] = get_source(project_slot(project, key))
+    for inst in plan.instances:
+        if inst.drum:   # a drum hit always plays its whole clip, as recorded (never cut short or stretched)
+            inst.duration = sources[inst.slot].length
     duration = max(i.start + i.duration for i in plan.instances) + project.render.tail
     return Prepared(plan, sources, duration)
 
@@ -70,12 +108,7 @@ def mix_audio(project: Project, prep: Prepared, progress: ProgressFn = _noop,
             progress(n / max(1, len(insts)), f"Making note {n + 1} of {len(insts)}…")
         src = prep.sources[inst.slot]
         y = audio_dsp.render_note(src.key, src.audio, sr, inst.duration, inst.shift)
-        slot = project.slots[inst.slot]
-        gain_db = slot.gain_db
-        if project.render.even_volumes:
-            slot.loudness_db = measure_loudness(src.audio)   # of the current trim
-            gain_db += level_gain_db(slot.loudness_db)
-        gain = 10 ** (gain_db / 20)
+        gain = 10 ** (slot_gain_db(project, project_slot(project, inst.slot), src.audio) / 20)
         if project.render.velocity_volume:
             gain *= 0.35 + 0.65 * inst.velocity
         a = int(inst.start * sr)

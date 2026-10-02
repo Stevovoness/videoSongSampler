@@ -8,6 +8,7 @@ ACCENT = "#ffb627"
 OK = "#4cc38a"
 WARN = "#f5a524"
 BAD = "#f05252"
+OCTAVE = "#5aa9ff"   # note played from a clip an octave away
 BG = "#17181c"
 PANEL = "#202228"
 PANEL2 = "#2a2d35"

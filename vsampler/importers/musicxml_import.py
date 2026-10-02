@@ -25,6 +25,20 @@ def _strip_repeats(score) -> None:
             site.remove(el)
 
 
+def _percussion_parts(score) -> set[int]:
+    """Indexes of parts written as percussion (percussion clef, unpitched notes or a drum instrument)."""
+    from music21 import clef, instrument, note, percussion
+
+    out = set()
+    for i, part in enumerate(getattr(score, "parts", [])):
+        els = part.recurse()
+        if (els.getElementsByClass((note.Unpitched, percussion.PercussionChord)).first() is not None
+                or els.getElementsByClass(clef.PercussionClef).first() is not None
+                or els.getElementsByClass(instrument.UnpitchedPercussion).first() is not None):
+            out.add(i)
+    return out
+
+
 def load_musicxml(path: str, kind: str = "musicxml") -> Song:
     from music21 import converter, midi
 
@@ -38,6 +52,7 @@ def load_musicxml(path: str, kind: str = "musicxml") -> Song:
     names = []
     for p in getattr(score, "parts", []):
         names.append(p.partName or p.id or f"Part {len(names) + 1}")
+    drums = _percussion_parts(score)
     try:
         mf = midi.translate.music21ObjectToMidiFile(score)
     except Exception:  # noqa: BLE001 - e.g. "badly formed repeats" from OMR'd scores
@@ -55,5 +70,6 @@ def load_musicxml(path: str, kind: str = "musicxml") -> Song:
             os.remove(tmp)
         except OSError:
             pass
-    song = song_from_pretty_midi(pm, path, kind, names)
+    # music21 writes one MIDI track per part, in order
+    song = song_from_pretty_midi(pm, path, kind, names, drums if len(pm.instruments) == len(names) else None)
     return song

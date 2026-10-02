@@ -21,7 +21,9 @@ HELP = """<h3>How it works</h3>
 <ol>
 <li><b>Your sounds</b> – record short videos of someone (or something!) making single notes.
 Add them and the app works out which note each one is and puts it on the keyboard.
-Auto-tune nudges each one to be perfectly in tune.</li>
+Auto-tune nudges each one to be perfectly in tune.
+Switch to <b>🥁 Drums</b> for percussive clips (slaps, claps, smacks…): each one goes on a drum pad and plays
+whenever the song's drum part hits that sound.</li>
 <li><b>The song</b> – open a MIDI file, MusicXML sheet music, an mp3/wav recording (the notes are worked out
 automatically), or a PDF/picture of sheet music (needs the free Audiveris reader).
 Choose which parts to play, change key or speed, and check every note has a clip.</li>
@@ -29,7 +31,12 @@ Choose which parts to play, change key or speed, and check every note has a clip
 </ol>
 <p>When a note is longer than its clip, the clip is <b>stretched without changing its pitch</b>:
 the start of the sound plays normally and the rest is slowed down, with the video slowed to match.</p>
-<p>Notes with no clip are reported in Step 2. You can let the app borrow the nearest clip and pitch-shift it.</p>"""
+<p><b>Play your clips like an instrument:</b> click a key or pad in Step 1 to hear it exactly as it will sound
+in the video. Or use your computer keyboard: <b>A W S E D F T G Y H U J K O L P ;</b> play the notes
+(<b>Z</b> / <b>X</b> change octave), and on the drum pads <b>1 2 3 4 · Q W E R · A S D F · Z X C V</b> play the pads.</p>
+<p>Notes with no clip are reported in Step 2. Tick <b>Octave jump</b> to play them from the same note an octave
+higher or lower (handy when a song goes above or below your clips). You can also let the app borrow the nearest
+clip and pitch-shift it. Missing drum sounds can use a similar drum clip instead.</p>"""
 
 
 class MainWindow(QMainWindow):
@@ -122,7 +129,7 @@ class MainWindow(QMainWindow):
         except Exception as e:  # noqa: BLE001
             QMessageBox.warning(self, "Couldn’t open project", str(e))
             return
-        missing = [s.path for s in p.slots.values() if not os.path.exists(s.path)]
+        missing = [s.path for s in [*p.slots.values(), *p.drum_slots.values()] if not os.path.exists(s.path)]
         if not p.audiveris_path:
             p.audiveris_path = self.state.project.audiveris_path
         self.state.project = p
