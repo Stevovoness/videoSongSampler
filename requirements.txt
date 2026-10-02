@@ -1,0 +1,23 @@
+# Install with:
+#   pip install -r requirements.txt
+#   pip install --no-deps basic-pitch==0.4.0
+# (basic-pitch is installed without dependencies because on Python 3.11+ Windows it otherwise pulls in
+#  TensorFlow; this app runs its ONNX model with onnxruntime instead.)
+PySide6>=6.6
+av>=12
+numpy>=1.24
+scipy>=1.10
+opencv-python-headless>=4.8
+librosa>=0.10
+soundfile>=0.12
+pretty_midi>=0.2.10
+music21>=9.1
+onnxruntime>=1.16
+# basic-pitch's own lightweight dependencies
+mir-eval>=0.6
+resampy>=0.2.2,<0.4.3
+scikit-learn
+typing-extensions
+# development / packaging
+pytest>=7
+pyinstaller>=6.3
