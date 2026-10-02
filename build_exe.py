@@ -38,19 +38,23 @@ def main() -> None:
     if not (ROOT / "assets" / "icon.ico").exists():
         subprocess.run([sys.executable, str(ROOT / "make_icon.py")], check=True)
 
-    subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "VideoSampler.spec"],
-                   cwd=ROOT, check=True)
+    # PyInstaller's scratch and output folders live outside the project: cloud-sync tools (OneDrive) lock the
+    # thousands of files in them and make the clean step fail with "Access is denied".
+    base = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "VideoSampler-build"
+    dist = base / "dist"
+    subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--workpath", str(base / "work"),
+                    "--distpath", str(dist), "VideoSampler.spec"], cwd=ROOT, check=True)
 
     out = ROOT / "release"
     out.mkdir(exist_ok=True)
     zip_base = out / f"VideoSampler-{__version__}-Windows-portable"
     print(f"Zipping {zip_base}.zip")
-    shutil.make_archive(str(zip_base), "zip", ROOT / "dist", "VideoSampler")
+    shutil.make_archive(str(zip_base), "zip", dist, "VideoSampler")
 
     iscc = find_iscc()
     if iscc:
-        subprocess.run([iscc, f"/DAppVersion={__version__}", "/Q", str(ROOT / "installer" / "VideoSampler.iss")],
-                       check=True)
+        subprocess.run([iscc, f"/DAppVersion={__version__}", f"/DSourceDir={dist / 'VideoSampler'}", "/Q",
+                        str(ROOT / "installer" / "VideoSampler.iss")], check=True)
         for f in (ROOT / "installer" / "Output").glob("*.exe"):
             shutil.move(str(f), out / f.name)
     else:

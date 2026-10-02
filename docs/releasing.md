@@ -18,11 +18,20 @@ Use Python 3.11: PyInstaller doesn't support 3.10.0.
 3. Build: `.venv\Scripts\python build_exe.py`
    - It runs `setup_tools.py`, which downloads Rubber Band and Audiveris (with its Java runtime) into `tools/`
      the first time.
-   - It makes a one-folder PyInstaller build (`VideoSampler.spec`) in `dist/VideoSampler/`.
+   - It makes a one-folder PyInstaller build (`VideoSampler.spec`) in
+     `%LOCALAPPDATA%\VideoSampler-build\dist\VideoSampler\`, with its scratch files in `...\work`. Both live outside
+     the project because OneDrive locks the files and breaks the build ("Access is denied").
    - It writes `release/VideoSampler-<version>-Windows-portable.zip` and, with Inno Setup installed,
      `release/VideoSampler-Setup-<version>.exe` (from `installer/VideoSampler.iss`; it installs per-user and
      needs no admin rights).
-4. Check that it starts: run `dist\VideoSampler\VideoSampler.exe`, or the installer.
+4. Check that it starts: run `%LOCALAPPDATA%\VideoSampler-build\dist\VideoSampler\VideoSampler.exe`, or the
+   installer.
+
+## Updating an installed copy
+Every installer has the same `AppId` (in `installer/VideoSampler.iss`; never change it). Running a newer
+`VideoSampler-Setup-x.y.z.exe` therefore upgrades the existing installation in place, keeping its shortcuts and
+settings, with no uninstall needed. For the portable zip, replace the old folder. The app doesn't check for
+updates itself.
 
 `build/`, `dist/`, `release/`, `installer/Output/` and `tools/audiveris/` are build output. They're in
 `.gitignore` and must never be committed.

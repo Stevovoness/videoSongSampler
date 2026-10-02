@@ -4,6 +4,10 @@ Every change gets a line here (see the workflow in [CLAUDE.md](../CLAUDE.md)). N
 **Unreleased** until a version is released.
 
 ## Unreleased
+- `build_exe.py` keeps PyInstaller's scratch and output folders in `%LOCALAPPDATA%\VideoSampler-build`. OneDrive
+  was locking `build\` and `dist\` and making the build fail with "Access is denied". The installer script takes
+  the output folder as `/DSourceDir`.
+- `docs/releasing.md` explains how updates work: a newer installer upgrades in place.
 
 ## 1.3.0
 - **Clip finder:** give the app a longer video and it suggests every clip point in it in one go: every held,

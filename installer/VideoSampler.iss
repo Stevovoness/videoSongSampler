@@ -4,6 +4,10 @@
 #ifndef AppVersion
   #define AppVersion "1.0.0"
 #endif
+; build_exe.py passes the PyInstaller output folder (kept outside OneDrive)
+#ifndef SourceDir
+  #define SourceDir "..\dist\VideoSampler"
+#endif
 
 [Setup]
 AppId={{6E0B8F3A-2C47-4E8B-9C1D-5A7F3B2E9D41}
@@ -29,7 +33,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Shortcuts:"
 
 [Files]
-Source: "..\dist\VideoSampler\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\Video Sampler"; Filename: "{app}\VideoSampler.exe"
