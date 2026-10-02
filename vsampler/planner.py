@@ -21,6 +21,7 @@ class NoteInstance:
     shift: float       # semitones (autotune correction + borrowing)
     velocity: float
     drum: bool = False
+    take: int = 0      # which of the slot's takes plays (they rotate)
 
 
 @dataclass
@@ -113,7 +114,8 @@ def make_plan(events: list[NoteEvent], slots: dict[int, ClipSlot], allow_shift: 
     plan = Plan()
     drum_slots = drum_slots or {}
     choice: dict[tuple[bool, int], Resolution] = {}
-    for e in events:
+    plays: Counter = Counter()      # slot key -> times played so far (picks the take)
+    for e in sorted(events, key=lambda e: e.start):
         ck = (e.drum, e.pitch)
         if ck not in choice:
             if e.drum:
@@ -135,12 +137,20 @@ def make_plan(events: list[NoteEvent], slots: dict[int, ClipSlot], allow_shift: 
         if r.slot is None:
             (plan.drum_missing if e.drum else plan.missing)[e.pitch] += 1
             continue
+        # several takes of a clip are used in turn, in time order
+        slot = drum_slots[drum_note(r.slot)] if e.drum else slots[r.slot]
+        take = plays[r.slot] % slot.take_count
+        plays[r.slot] += 1
+        clip = slot.take(take)
         if e.drum:
             # drums are one-shots: the whole recorded hit plays, never stretched
-            dur = max(0.03, _clip_length(drum_slots[drum_note(r.slot)]) or e.duration)
-            plan.instances.append(NoteInstance(r.slot, e.pitch, e.start, dur, 0.0, e.velocity, True))
+            dur = max(0.03, _clip_length(clip) or e.duration)
+            plan.instances.append(NoteInstance(r.slot, e.pitch, e.start, dur, 0.0, e.velocity, True, take))
         else:
-            plan.instances.append(NoteInstance(r.slot, e.pitch, e.start, max(0.03, e.duration), r.shift, e.velocity))
+            # each take is tuned on its own: swap take 0's auto-tune correction for this take's
+            shift = r.shift - slot.autotune_shift(r.slot) + clip.autotune_shift(r.slot)
+            plan.instances.append(NoteInstance(r.slot, e.pitch, e.start, max(0.03, e.duration), shift, e.velocity,
+                                               False, take))
     return plan
 
 

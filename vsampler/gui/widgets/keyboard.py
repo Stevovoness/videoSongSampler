@@ -23,6 +23,7 @@ class PianoKeyboard(QWidget):
         self.borrowed: set[int] = set()
         self.octave: set[int] = set()
         self.letters: dict[int, str] = {}          # computer-keyboard key that plays each note
+        self.takes: dict[int, int] = {}            # notes with several takes -> how many
         self.describe = None                       # optional fn(midi) -> what the key plays (tooltip)
         self.selected: int | None = None
         self._lit: set[int] = set()
@@ -142,6 +143,15 @@ class PianoKeyboard(QWidget):
                 p.setPen(QColor("#ffffff") if light else QColor("#333"))
                 name = midi_to_name(m)
                 p.drawText(r.adjusted(0, 0, 0, -6), Qt.AlignHCenter | Qt.AlignBottom, name)
+            # several takes: small "×3" badge
+            n_takes = self.takes.get(m, 1)
+            if n_takes > 1:
+                f.setPointSizeF(7)
+                f.setBold(True)
+                p.setFont(f)
+                p.setPen(QColor("#ffffff"))
+                p.drawText(QRectF(r.left(), r.top() + (22 if m in self.needed else 6), r.width(), 12),
+                           Qt.AlignHCenter | Qt.AlignTop, f"×{n_takes}")
             # computer-keyboard letter that plays this key
             letter = self.letters.get(m)
             if letter:
@@ -164,6 +174,8 @@ class PianoKeyboard(QWidget):
                     "clip loaded" if k in self.assigned else "no clip yet — click or drop a video")
                 if k in self.needed and k not in self.assigned:
                     status += " (the song needs this note!)"
+                if self.takes.get(k, 1) > 1:
+                    status += f" · {self.takes[k]} takes, used in turn"
                 if k in self.letters:
                     status += f"   ·   key: {self.letters[k]}"
                 QToolTip.showText(e.globalPosition().toPoint(), f"{pretty_name(k)}: {status}", self)

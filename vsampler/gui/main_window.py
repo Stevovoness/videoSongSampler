@@ -23,7 +23,9 @@ HELP = """<h3>How it works</h3>
 Add them and the app works out which note each one is and puts it on the keyboard.
 Auto-tune nudges each one to be perfectly in tune.
 Switch to <b>🥁 Drums</b> for percussive clips (slaps, claps, smacks…): each one goes on a drum pad and plays
-whenever the song's drum part hits that sound.</li>
+whenever the song's drum part hits that sound.
+Got one long video instead? Click <b>✂ Cut clips from a long video…</b>: the app suggests every note and hit in it,
+you adjust them on a timeline and add them all at once. Several takes of a note are used in turn.</li>
 <li><b>The song</b> – open a MIDI file, MusicXML sheet music, an mp3/wav recording (the notes are worked out
 automatically), or a PDF/picture of sheet music (needs the free Audiveris reader).
 Choose which parts to play, change key or speed, and check every note has a clip.</li>

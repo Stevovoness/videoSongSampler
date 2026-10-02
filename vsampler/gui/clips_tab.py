@@ -15,7 +15,8 @@ from PySide6.QtWidgets import (QAbstractSpinBox, QApplication, QButtonGroup, QCh
                                QListWidget, QListWidgetItem, QMessageBox, QPushButton, QSlider, QSplitter,
                                QStackedWidget, QVBoxLayout, QWidget)
 
-from ..clips import SR, analyze_clip, level_gain_db, measure_loudness
+from ..clipfinder import LONG_VIDEO_SECONDS
+from ..clips import SR, analyze_clip, level_gain_db, measure_loudness, trim_thumb_key, video_duration
 from ..drums import GM_DRUMS, drum_name, drum_note, drum_short
 from ..models import ClipSlot
 from ..notes import describe_detected, midi_to_name, pretty_name
@@ -56,6 +57,10 @@ def drum_combo() -> QComboBox:
     return c
 
 
+def _mmss(t: float) -> str:
+    return f"{int(t) // 60}:{t % 60:05.2f}"
+
+
 def set_combo_note(c: QComboBox, midi: int) -> None:
     i = c.findData(midi)
     if i >= 0:
@@ -89,6 +94,8 @@ class ClipsTab(QWidget):
         self.sel: dict[str, int | None] = {"notes": None, "drums": None}
         self.pending = 0
         self.kb_base = 60                       # computer keyboard 'A' plays this note
+        self.take_sel = 0                       # which take of the selected slot the detail panel shows
+        self.finders: list = []                 # open clip finder windows
         self.pad = SamplePad(state, self)
         self.pad.failed.connect(lambda msg: self.status.setText(f"Couldn’t play: {msg}"))
 
@@ -127,6 +134,11 @@ class ClipsTab(QWidget):
         self.add_btn.setProperty("primary", True)
         self.add_btn.clicked.connect(self.bulk_add)
         head.addWidget(self.add_btn)
+        self.cut_btn = QPushButton("✂  Cut clips from a long video…")
+        self.cut_btn.setToolTip("Give the app a longer video: it suggests every note (and hit) in it, "
+                                "you adjust them and add them all at once")
+        self.cut_btn.clicked.connect(self.cut_long)
+        head.addWidget(self.cut_btn)
         root.addLayout(head)
         self.hint = hint("")
         root.addWidget(self.hint)
@@ -178,10 +190,10 @@ class ClipsTab(QWidget):
         self.keys.setMinimumHeight(170)
         self.keys.describe = self._describe_key
         self.keys.key_clicked.connect(self._clicked)
-        self.keys.files_dropped.connect(lambda m, paths: self.assign_file(m, paths[0], drum=False))
+        self.keys.files_dropped.connect(lambda m, paths: self.add_video(paths[0], m, drum=False))
         self.pads = DrumPads()
         self.pads.key_clicked.connect(self._clicked)
-        self.pads.files_dropped.connect(lambda n, paths: self.assign_file(n, paths[0], drum=True))
+        self.pads.files_dropped.connect(lambda n, paths: self.add_video(paths[0], n, drum=True))
         self.stack.addWidget(self.keys)
         self.stack.addWidget(self.pads)
         self.stack.setMinimumHeight(200)
@@ -286,9 +298,35 @@ class ClipsTab(QWidget):
         self.choose_btn.clicked.connect(self.choose_for_selected)
         self.remove_btn = QPushButton("Remove")
         self.remove_btn.clicked.connect(self.remove_selected)
+        self.add_take_btn = QPushButton("＋ Add take…")
+        self.add_take_btn.setToolTip("Add another recording of this sound. Takes are used in turn, so the video "
+                                     "doesn’t show the same moment every time")
+        self.add_take_btn.clicked.connect(self.add_take)
         brow.addWidget(self.choose_btn)
+        brow.addWidget(self.add_take_btn)
         brow.addWidget(self.remove_btn)
         col.addLayout(brow)
+        krow = QHBoxLayout()
+        self.take_prev = QPushButton("◀")
+        self.take_next = QPushButton("▶")
+        for b in (self.take_prev, self.take_next):
+            b.setFixedWidth(34)
+        self.take_prev.clicked.connect(lambda: self._step_take(-1))
+        self.take_next.clicked.connect(lambda: self._step_take(1))
+        self.take_lab = QLabel("")
+        self.take_main = QPushButton("Make main take")
+        self.take_main.clicked.connect(self.make_main_take)
+        self.take_del = QPushButton("Remove take")
+        self.take_del.clicked.connect(self.remove_take)
+        self.adjust_btn = QPushButton("✂  Adjust in the video…")
+        self.adjust_btn.setToolTip("Open this clip in the clip finder to move or resize it within its video")
+        self.adjust_btn.clicked.connect(self.adjust_in_finder)
+        for w in (self.take_prev, self.take_lab, self.take_next, self.take_main, self.take_del):
+            krow.addWidget(w)
+        krow.addStretch(1)
+        krow.addWidget(self.adjust_btn)
+        col.addLayout(krow)
+        self._take_widgets = [self.take_prev, self.take_lab, self.take_next, self.take_main, self.take_del]
 
         self.d_detect = QLabel("")
         self.d_detect.setWordWrap(True)
@@ -336,7 +374,8 @@ class ClipsTab(QWidget):
         col.addStretch(1)
         lay.addWidget(form_box, 2)
         self._detail_widgets = [self.play_btn, self.remove_btn, self.trim_a, self.trim_b,
-                                self.autotune, self.gain, self.move_to, self.move_pad, auto]
+                                self.autotune, self.gain, self.move_to, self.move_pad, auto, self.add_take_btn,
+                                self.adjust_btn]
 
     # ------------------------------------------------------------------ refresh
     def _range_changed(self) -> None:
@@ -360,7 +399,10 @@ class ClipsTab(QWidget):
         borrowed = set(plan.borrowed) if plan else set()
         octave = set(plan.octave) if plan else set()
         self.keys.set_state(set(proj.slots), needed, borrowed, octave)
-        thumbs = {n: self.state.thumbs[s.path] for n, s in proj.drum_slots.items() if s.path in self.state.thumbs}
+        thumbs = {n: self.state.thumbs[trim_thumb_key(s)] for n, s in proj.drum_slots.items()
+                  if trim_thumb_key(s) in self.state.thumbs}
+        self.keys.takes = {m: s.take_count for m, s in proj.slots.items() if s.take_count > 1}
+        self.pads.takes = {n: s.take_count for n, s in proj.drum_slots.items() if s.take_count > 1}
         standin = dict(plan.drum_standin) if plan else {}
         self.pads.set_state(set(proj.drum_slots), needed_d, standin, thumbs)
         self._update_letters()
@@ -370,15 +412,16 @@ class ClipsTab(QWidget):
         self.list.clear()
         for m in sorted(slots):
             s = slots[m]
+            takes = f"  ·  {s.take_count} takes" if s.take_count > 1 else ""
             if self.drum:
-                text = f"{drum_short(m)}   (drum {m})\n{os.path.basename(s.path)}"
+                text = f"{drum_short(m)}   (drum {m}){takes}\n{os.path.basename(s.path)}"
             else:
-                text = f"{pretty_name(m)}\n{os.path.basename(s.path)}"
+                text = f"{pretty_name(m)}{takes}\n{os.path.basename(s.path)}"
                 if s.detected_midi is not None:
                     text += f"\nheard: {describe_detected(s.detected_midi)}"
             item = QListWidgetItem(text)
             item.setData(Qt.UserRole, m)
-            pm = self.state.thumbs.get(s.path)
+            pm = self.state.thumbs.get(trim_thumb_key(s))
             if pm:
                 item.setIcon(QIcon(pm))
             self.list.addItem(item)
@@ -414,21 +457,27 @@ class ClipsTab(QWidget):
             set_combo_note(self.lo, max(21, min(min(slots) - 2, 48)))
             set_combo_note(self.hi, min(108, max(max(slots) + 2, 72)))
         for s in list(slots.values()) + list(proj.drum_slots.values()):
-            if s.path not in self.state.thumbs and os.path.exists(s.path):
-                self._load_thumb(s.path, s.trim_start)
+            self._load_thumbs(s)
         self.set_mode("drums" if proj.drum_slots and not proj.slots else "notes")
         self.pad.warm()
 
-    def _load_thumb(self, path: str, t: float) -> None:
+    def _load_thumbs(self, slot: ClipSlot) -> None:
+        """Fetch thumbnails for every take of a slot that doesn't have one yet (in the background)."""
         from ..clips import grab_frame
 
-        def done(img):
-            pm = to_pixmap(img)
-            if pm:
-                self.state.thumbs[path] = pm
-                self.refresh()
+        for i in range(slot.take_count):
+            clip = slot.take(i)
+            key = trim_thumb_key(clip)
+            if key in self.state.thumbs or not os.path.exists(clip.path):
+                continue
 
-        run_task(grab_frame, path, t + 0.15, on_done=done, on_error=lambda *_: None)
+            def done(img, key=key):
+                pm = to_pixmap(img)
+                if pm:
+                    self.state.thumbs[key] = pm
+                    self.refresh()
+
+            run_task(grab_frame, clip.path, clip.trim_start + 0.15, on_done=done, on_error=lambda *_: None)
 
     # ------------------------------------------------------------------ computer keyboard
     def _update_letters(self) -> None:
@@ -510,15 +559,19 @@ class ClipsTab(QWidget):
             self.keys.flash(n)
         if r.slot is None:
             return
-        self.pad.trigger(r.slot, r.shift)
+        take = self.pad.trigger(r.slot, r.shift)
         if show_video:
+            if take is not None and r.how == "exact" and n == self.selected:
+                self.take_sel = take
+                self._fill_detail()
             self._show_video_hit()
 
     def _show_video_hit(self) -> None:
         """Play the selected clip's picture (muted - the sound comes from the sample pad) over its trimmed sound."""
-        s = self._slot()
+        s = self._rec()
         if not s:
             return
+        self._load_video(s)
         self.vaudio.setMuted(True)
         self.vplayer.setPosition(int(s.trim_start * 1000))
         self.vplayer.play()
@@ -532,20 +585,29 @@ class ClipsTab(QWidget):
     def select_key(self, m: int | None, play: bool = False) -> None:
         changed = m != self.sel[self.mode]
         self.sel[self.mode] = m
+        if changed:
+            self.take_sel = 0
         (self.pads if self.drum else self.keys).select(m)
         slot = self._slots().get(m) if m is not None else None
         if changed or not play:
             self.vplayer.stop()
             self._vstop.stop()
-            if slot and os.path.exists(slot.path):
-                self.vplayer.setSource(QUrl.fromLocalFile(slot.path))
-                self.vplayer.setPosition(int(slot.trim_start * 1000))
+            rec = self._rec()
+            if rec and os.path.exists(rec.path):
+                self.vplayer.setSource(QUrl.fromLocalFile(rec.path))
+                self.vplayer.setPosition(int(rec.trim_start * 1000))
                 self.vplayer.pause()
             else:
                 self.vplayer.setSource(QUrl())
         self.refresh()
         if play:
             self.play_key(m, show_video=slot is not None)
+
+    def _load_video(self, rec) -> None:
+        """Point the preview at a take's video (only reloads when the file changes)."""
+        url = QUrl.fromLocalFile(rec.path) if os.path.exists(rec.path) else QUrl()
+        if self.vplayer.source() != url:
+            self.vplayer.setSource(url)
 
     def _list_pick(self, cur, _prev) -> None:
         if cur is not None:
@@ -558,6 +620,9 @@ class ClipsTab(QWidget):
         self.tuned_btn.setEnabled(m is not None)
         for w in self._detail_widgets:
             w.setEnabled(slot is not None)
+        if slot is None:
+            for w in self._take_widgets:
+                w.setVisible(False)
         if m is None:
             self.d_title.setText("Pick a pad" if self.drum else "Pick a key")
             self.d_file.setText("Click a pad above to hear it and choose its video." if self.drum else
@@ -579,23 +644,34 @@ class ClipsTab(QWidget):
             self.choose_btn.setText("Choose video…")
             return
         self.choose_btn.setText("Replace video…")
-        self.d_file.setText(slot.path)
+        self.take_sel %= slot.take_count
+        rec = self._rec()
+        span = f"{_mmss(rec.trim_start)}–{_mmss(rec.trim_end)}" if rec.trim_end is not None else \
+            f"from {_mmss(rec.trim_start)}"
+        self.d_file.setText(f"{os.path.basename(rec.path)}   ·   {span}")
+        self.d_file.setToolTip(rec.path)
+        many = slot.take_count > 1
+        for w in self._take_widgets:
+            w.setVisible(many)
+        self.take_lab.setText(f"Take {self.take_sel + 1} of {slot.take_count}"
+                              + ("  (main)" if self.take_sel == 0 else ""))
+        self.take_main.setEnabled(self.take_sel > 0)
         if self.drum:
             self.d_detect.setText("Percussion: played exactly as recorded, never auto-tuned or stretched.")
-        elif slot.detected_midi is None:
+        elif rec.detected_midi is None:
             self.d_detect.setText(f"<span style='color:{theme.WARN}'>Couldn’t hear a clear note in this clip — "
                                   "it will be used as-is.</span>")
         else:
-            diff = m - slot.detected_midi
-            txt = f"Heard: <b>{describe_detected(slot.detected_midi)}</b>"
+            diff = m - rec.detected_midi
+            txt = f"Heard: <b>{describe_detected(rec.detected_midi)}</b>"
             if abs(diff) > 1.0:
                 txt += (f"<br><span style='color:{theme.WARN}'>That’s {abs(diff):.1f} semitones away from "
                         f"{midi_to_name(m)}. Auto-tune only fixes small differences — is this the right key?</span>")
             elif slot.autotune and abs(diff) > 0.005:
                 txt += f" → tuned {'up' if diff > 0 else 'down'} {abs(diff) * 100:.0f}¢"
             self.d_detect.setText(txt)
-        self.d_level.setText(self._level_text(slot))
-        for w, v in ((self.trim_a, slot.trim_start), (self.trim_b, slot.trim_end or 0.0)):
+        self.d_level.setText(self._level_text(rec))
+        for w, v in ((self.trim_a, rec.trim_start), (self.trim_b, rec.trim_end or 0.0)):
             w.blockSignals(True)
             w.setValue(v)
             w.blockSignals(False)
@@ -608,7 +684,7 @@ class ClipsTab(QWidget):
         self.gain_lab.setText(f"{slot.gain_db:+.0f} dB")
         set_combo_note(self.move_pad if self.drum else self.move_to, m)
 
-    def _level_text(self, slot: ClipSlot) -> str:
+    def _level_text(self, slot) -> str:
         if slot.loudness_db is None:
             return ""
         txt = f"Loudness: <b>{slot.loudness_db:.0f} dB</b>"
@@ -624,7 +700,7 @@ class ClipsTab(QWidget):
         self.state.project.render.even_volumes = on
         self.state.touch_slots()
 
-    def _update_loudness(self, s: ClipSlot) -> None:
+    def _update_loudness(self, s) -> None:
         audio = sources.get_audio(s.path)
         end = s.trim_end if s.trim_end is not None else audio.shape[1] / SR
         s.loudness_db = measure_loudness(audio[:, int(s.trim_start * SR): int(end * SR)])
@@ -633,8 +709,16 @@ class ClipsTab(QWidget):
     def _slot(self) -> ClipSlot | None:
         return self._slots().get(self.selected) if self.selected is not None else None
 
-    def _trim_changed(self) -> None:
+    def _rec(self):
+        """The recording the detail panel shows: the slot itself (take 0) or one of its extra takes."""
         s = self._slot()
+        if s is None:
+            return None
+        i = self.take_sel % s.take_count
+        return s if i == 0 else s.extra_takes[i - 1]
+
+    def _trim_changed(self) -> None:
+        s = self._rec()
         if s:
             a, b = self.trim_a.value(), self.trim_b.value()
             if b <= a + 0.02:
@@ -645,7 +729,7 @@ class ClipsTab(QWidget):
             self.state.dirty = True
 
     def auto_trim_selected(self) -> None:
-        s = self._slot()
+        s = self._rec()
         if not s:
             return
         from ..clips import auto_trim
@@ -706,9 +790,10 @@ class ClipsTab(QWidget):
 
     # ------------------------------------------------------------------ playback
     def play_clip(self) -> None:
-        s = self._slot()
+        s = self._rec()
         if not s:
             return
+        self._load_video(s)
         self._vstop.stop()
         if self.vplayer.playbackState() == QMediaPlayer.PlayingState:
             self.vplayer.pause()
@@ -724,7 +809,85 @@ class ClipsTab(QWidget):
         name = drum_name(self.selected) if self.drum else pretty_name(self.selected)
         path, _ = QFileDialog.getOpenFileName(self, f"Video for {name}", "", VIDEO_FILTER)
         if path:
-            self.assign_file(self.selected, path)
+            self.add_video(path, self.selected)
+
+    def add_take(self) -> None:
+        if self.selected is None or self._slot() is None:
+            return
+        name = drum_name(self.selected) if self.drum else pretty_name(self.selected)
+        path, _ = QFileDialog.getOpenFileName(self, f"Another take for {name}", "", VIDEO_FILTER)
+        if path:
+            self.add_video(path, self.selected, add_take=True)
+
+    def add_video(self, path: str, n: int | None, drum: bool | None = None, add_take: bool = False) -> None:
+        """Use a video for key / pad n (None = work it out). Long videos open the clip finder instead."""
+        drum = self.drum if drum is None else drum
+        try:
+            long = video_duration(path) > LONG_VIDEO_SECONDS
+        except Exception:  # noqa: BLE001 - let the normal analysis report unreadable files
+            long = False
+        if long:
+            self.open_finder(path, target=n, drum=drum)
+        else:
+            self.assign_file(n, path, drum=drum, add_take=add_take)
+
+    def cut_long(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Cut clips from a long video", "", VIDEO_FILTER)
+        if path:
+            target = self.selected if self.selected is not None and self._slot() is None else None
+            self.open_finder(path, target=target)
+
+    def open_finder(self, path: str, target: int | None = None, drum: bool | None = None,
+                    edit: tuple[bool, int, int] | None = None) -> None:
+        from .clip_finder import ClipFinderDialog
+        drum = self.drum if drum is None else drum
+        dlg = ClipFinderDialog(self.state, self.pad, path, "drums" if drum else "notes", target, self._free_pad,
+                               edit, on_added=self._finder_added, parent=self)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+        self.finders.append(dlg)
+        dlg.destroyed.connect(lambda *_: self.finders.remove(dlg) if dlg in self.finders else None)
+        dlg.show()
+
+    def adjust_in_finder(self) -> None:
+        rec = self._rec()
+        if rec is not None:
+            self.open_finder(rec.path, drum=self.drum, edit=(self.drum, self.selected, self.take_sel))
+
+    def _finder_added(self, slots: list[ClipSlot]) -> None:
+        for s in slots:
+            self._load_thumbs(s)
+        self.refresh()
+
+    def _step_take(self, d: int) -> None:
+        s = self._slot()
+        if s:
+            self.take_sel = (self.take_sel + d) % s.take_count
+            rec = self._rec()
+            self._load_video(rec)
+            self.vplayer.setPosition(int(rec.trim_start * 1000))
+            self.vplayer.pause()
+            self._fill_detail()
+
+    def make_main_take(self) -> None:
+        s, k = self._slot(), self.take_sel
+        if not s or k == 0:
+            return
+        main = s.as_take()
+        s.set_take(0, s.extra_takes[k - 1])
+        s.extra_takes[k - 1] = main
+        self.take_sel = 0
+        self.state.touch_slots()
+
+    def remove_take(self) -> None:
+        s, k = self._slot(), self.take_sel
+        if not s or s.take_count < 2:
+            return
+        if k == 0:
+            s.set_take(0, s.extra_takes.pop(0))
+        else:
+            s.extra_takes.pop(k - 1)
+        self.take_sel = 0
+        self.state.touch_slots()
 
     def _free_pad(self) -> int | None:
         """The next empty pad: drum sounds the song uses (most used first), then the main kit."""
@@ -738,8 +901,10 @@ class ClipsTab(QWidget):
                 return n
         return next((n for n in sorted(GM_DRUMS) if n not in drums), None)
 
-    def assign_file(self, n: int | None, path: str, drum: bool | None = None) -> None:
-        """Analyse a clip and put it on note / pad `n`, or (n=None) on its detected note / the next free pad."""
+    def assign_file(self, n: int | None, path: str, drum: bool | None = None, add_take: bool = False) -> None:
+        """Analyse a clip and put it on note / pad `n`, or (n=None) on its detected note / the next free pad.
+
+        add_take: add it as another take of n's clip instead of replacing it."""
         drum = self.drum if drum is None else drum
         self.pending += 1
         self.refresh()
@@ -782,10 +947,14 @@ class ClipsTab(QWidget):
             sources.forget_frames(path)
             slot = ClipSlot(path, a.trim_start, a.trim_end, None if as_drum else a.detected_midi,
                             autotune=not as_drum, loudness_db=a.loudness_db)
-            self._slots(as_drum)[target] = slot
+            existing = self._slots(as_drum).get(target)
+            if add_take and existing is not None:
+                existing.extra_takes.append(slot.as_take())
+            else:
+                self._slots(as_drum)[target] = slot
             pm = to_pixmap(a.thumbnail)
             if pm:
-                self.state.thumbs[path] = pm
+                self.state.thumbs[trim_thumb_key(slot)] = pm
             self.state.confidence[path] = a.confidence
             if not as_drum:
                 lo, hi = self.lo.currentData(), self.hi.currentData()
@@ -796,6 +965,8 @@ class ClipsTab(QWidget):
             if as_drum != self.drum:
                 self.set_mode("drums" if as_drum else "notes")
             self.select_key(target)
+            if add_take and existing is not None:
+                self.take_sel = existing.take_count - 1
             self.state.touch_slots()
 
         def fail(e, _tb):
@@ -828,4 +999,4 @@ class ClipsTab(QWidget):
         title = "Add drum clips (slaps, claps, smacks…)" if self.drum else "Add note clips"
         paths, _ = QFileDialog.getOpenFileNames(self, title, "", VIDEO_FILTER)
         for p in paths:
-            self.assign_file(None, p)
+            self.add_video(p, None)

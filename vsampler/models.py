@@ -7,8 +7,18 @@ from pathlib import Path
 
 
 @dataclass
+class Take:
+    """An extra recording of a slot's note. Takes are used in turn each time the note is played."""
+    path: str
+    trim_start: float = 0.0
+    trim_end: float | None = None
+    detected_midi: float | None = None
+    loudness_db: float | None = None
+
+
+@dataclass
 class ClipSlot:
-    """A video clip assigned to one note."""
+    """A video clip assigned to one note (take 0), plus optional extra takes."""
     path: str
     trim_start: float = 0.0          # seconds into the source clip where the sound starts
     trim_end: float | None = None    # seconds; None = end of clip
@@ -16,6 +26,41 @@ class ClipSlot:
     autotune: bool = True            # correct the detected pitch to exactly the slot's note
     gain_db: float = 0.0             # user adjustment, on top of automatic levelling
     loudness_db: float | None = None # measured loudness of the trimmed sound (dBFS)
+    extra_takes: list[Take] = field(default_factory=list)
+
+    @property
+    def take_count(self) -> int:
+        return 1 + len(self.extra_takes)
+
+    def take(self, i: int) -> "ClipSlot":
+        """Take i as a plain one-take slot (take 0 is the slot itself). Volume and auto-tune are shared."""
+        i %= self.take_count
+        if i == 0:
+            return self if not self.extra_takes else ClipSlot(
+                self.path, self.trim_start, self.trim_end, self.detected_midi, self.autotune, self.gain_db,
+                self.loudness_db)
+        t = self.extra_takes[i - 1]
+        return ClipSlot(t.path, t.trim_start, t.trim_end, t.detected_midi, self.autotune, self.gain_db, t.loudness_db)
+
+    def as_take(self) -> Take:
+        return Take(self.path, self.trim_start, self.trim_end, self.detected_midi, self.loudness_db)
+
+    def set_take(self, i: int, t: Take) -> None:
+        """Replace take i's recording (path, trims, pitch, loudness)."""
+        if i == 0:
+            self.path, self.trim_start, self.trim_end = t.path, t.trim_start, t.trim_end
+            self.detected_midi, self.loudness_db = t.detected_midi, t.loudness_db
+        else:
+            self.extra_takes[i - 1] = t
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ClipSlot":
+        d = dict(d)
+        takes = [Take(**{k: v for k, v in t.items() if k in Take.__dataclass_fields__})
+                 for t in d.pop("extra_takes", None) or []]
+        s = cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+        s.extra_takes = takes
+        return s
 
     def autotune_shift(self, slot_midi: int) -> float:
         """Semitones to shift so the clip is exactly in tune (only small corrections)."""
@@ -122,8 +167,8 @@ class Project:
     def from_json(cls, text: str) -> "Project":
         d = json.loads(text)
         p = cls()
-        p.slots = {int(k): ClipSlot(**v) for k, v in d.get("slots", {}).items()}
-        p.drum_slots = {int(k): ClipSlot(**v) for k, v in d.get("drum_slots", {}).items()}
+        p.slots = {int(k): ClipSlot.from_dict(v) for k, v in d.get("slots", {}).items()}
+        p.drum_slots = {int(k): ClipSlot.from_dict(v) for k, v in d.get("drum_slots", {}).items()}
         p.song_path = d.get("song_path", "")
         p.song = SongOptions(**{k: v for k, v in d.get("song", {}).items() if k in SongOptions.__dataclass_fields__})
         p.render = RenderSettings(**{k: v for k, v in d.get("render", {}).items() if k in RenderSettings.__dataclass_fields__})

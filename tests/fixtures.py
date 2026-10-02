@@ -67,3 +67,48 @@ def make_midi(path: str | Path, notes: list[tuple[int, float, float]], chord: bo
 
 def clip_name(midi: int) -> str:
     return midi_to_name(midi).replace("#", "s")
+
+
+def make_long_clip(path: str | Path, notes: list[tuple[float, float, float]], hits: list[float] = (),
+                   total: float | None = None, size=(160, 120), fps: int = 15, sr: int = 44100) -> str:
+    """One video holding several notes [(midi, start, duration)] and noise-burst hits [time], silence between."""
+    path = str(path)
+    total = total or max([s + d for _, s, d in notes] + [h + 0.3 for h in hits]) + 0.5
+    w, h = size
+    c = av.open(path, "w")
+    vs = c.add_stream("libx264", rate=fps)
+    vs.width, vs.height, vs.pix_fmt = w, h, "yuv420p"
+    ast = c.add_stream("aac", rate=sr)
+    ast.codec_context.layout = "mono"
+    for i in range(int(total * fps)):
+        img = np.zeros((h, w, 3), np.uint8)
+        img[:] = (int(255 * i / (total * fps)), 80, 160)
+        f = av.VideoFrame.from_ndarray(img, format="bgr24")
+        f.pts = i
+        for p in vs.encode(f):
+            c.mux(p)
+    t = np.arange(int(total * sr)) / sr
+    y = np.zeros_like(t)
+    for midi, start, dur in notes:
+        m = (t >= start) & (t < start + dur)
+        tt = t[m] - start
+        env = np.minimum(1.0, tt / 0.02) * np.minimum(1.0, (start + dur - t[m]) / 0.03)
+        y[m] += 0.5 * env * np.sin(2 * np.pi * midi_to_freq(midi) * tt)
+    rng = np.random.default_rng(1)
+    for hit in hits:
+        m = (t >= hit) & (t < hit + 0.12)
+        tt = t[m] - hit
+        y[m] += 0.8 * rng.standard_normal(m.sum()) * np.exp(-tt * 40)
+    y = np.clip(y, -1, 1).astype(np.float32)
+    for k in range(0, len(y), 1024):
+        af = av.AudioFrame.from_ndarray(y[k:k + 1024][None, :], format="flt", layout="mono")
+        af.sample_rate = sr
+        af.pts = k
+        for p in ast.encode(af):
+            c.mux(p)
+    for p in vs.encode():
+        c.mux(p)
+    for p in ast.encode():
+        c.mux(p)
+    c.close()
+    return path

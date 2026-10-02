@@ -2,7 +2,8 @@
 
 Each (clip, trim, shift, volume) combination is rendered once in the background with the same code the
 renderer uses, written to a WAV and loaded into a QSoundEffect, which starts playing with very little delay.
-Different keys can sound at the same time; pressing a key again restarts it.
+Different keys can sound at the same time; pressing a key again restarts it. A slot with several takes plays
+them in turn, just like the video does.
 """
 from __future__ import annotations
 
@@ -10,14 +11,16 @@ import copy
 import os
 import shutil
 import tempfile
+from collections import Counter
 
 import soundfile as sf
 from PySide6.QtCore import QObject, QUrl, Signal
 from PySide6.QtMultimedia import QSoundEffect
 
 from ...drums import is_drum_key
+from ...models import ClipSlot
 from ...render import sources
-from ...render.renderer import all_slot_keys, project_slot, render_slot_audio
+from ...render.renderer import all_slot_keys, project_slot, render_clip_audio
 from ..worker import run_task
 
 
@@ -31,25 +34,37 @@ class SamplePad(QObject):
         self._fx: dict[tuple, QSoundEffect] = {}
         self._loading: set[tuple] = set()
         self._play_when_ready: set[tuple] = set()
+        self._presses: Counter = Counter()     # slot key -> presses so far (picks the take)
         self._n = 0
 
     def __del__(self):
         shutil.rmtree(getattr(self, "_dir", ""), ignore_errors=True)
 
-    def _sig(self, key: int, shift: float) -> tuple | None:
+    def _sig(self, clip: ClipSlot, shift: float) -> tuple:
+        return (sources.source_key(clip), round(shift, 3), round(clip.gain_db, 2),
+                self.state.project.render.even_volumes)
+
+    # ------------------------------------------------------------------ public
+    def trigger(self, key: int, shift: float = 0.0) -> int | None:
+        """Play slot `key` (shifted by `shift` semitones, as resolved for take 0) now, or as soon as it's ready.
+
+        Takes rotate on each press. Returns the take played.
+        """
         try:
             slot = project_slot(self.state.project, key)
         except KeyError:
             return None
-        return (key, sources.source_key(slot), round(shift, 3), round(slot.gain_db, 2),
-                self.state.project.render.even_volumes, slot.autotune)
+        take = self._presses[key] % slot.take_count
+        self._presses[key] += 1
+        clip = slot.take(take)
+        if not is_drum_key(key):   # each take has its own auto-tune correction
+            shift = shift - slot.autotune_shift(key) + clip.autotune_shift(key)
+        self.trigger_clip(clip, shift)
+        return take
 
-    # ------------------------------------------------------------------ public
-    def trigger(self, key: int, shift: float = 0.0) -> None:
-        """Play slot `key` (pitch-shifted by `shift` semitones) now, or as soon as it's ready."""
-        sig = self._sig(key, shift)
-        if sig is None:
-            return
+    def trigger_clip(self, clip: ClipSlot, shift: float = 0.0) -> None:
+        """Play any clip (it needn't be in the project yet), tuned and levelled like the render."""
+        sig = self._sig(clip, shift)
         fx = self._fx.get(sig)
         if fx is not None and fx.status() == QSoundEffect.Status.Ready:
             fx.stop()
@@ -57,36 +72,40 @@ class SamplePad(QObject):
             return
         self._play_when_ready.add(sig)
         if fx is None:
-            self._prepare(sig, key, shift)
+            self._prepare(sig, clip, shift)
 
     def warm(self) -> None:
-        """Get every clip ready to play (unshifted) and drop sounds for clips that changed."""
+        """Get every take of every clip ready to play, and drop sounds for clips that changed."""
         wanted = {}
-        for key in all_slot_keys(self.state.project):
-            slot = project_slot(self.state.project, key)
-            if os.path.exists(slot.path):
-                shift = 0.0 if is_drum_key(key) else slot.autotune_shift(key)
-                wanted[self._sig(key, shift)] = (key, shift)
-        # a sound stays valid while its slot's clip, trim and volume settings are unchanged (any shift)
-        current = {(s[0], s[1]) + s[3:] for s in wanted}
+        project = self.state.project
+        for key in all_slot_keys(project):
+            slot = project_slot(project, key)
+            for t in range(slot.take_count):
+                clip = slot.take(t)
+                if os.path.exists(clip.path):
+                    shift = 0.0 if is_drum_key(key) else clip.autotune_shift(key)
+                    wanted[self._sig(clip, shift)] = (clip, shift)
+        # a sound stays valid while its clip, trim and volume settings are unchanged (any shift)
+        current = {(s[0],) + s[2:] for s in wanted}
         for sig in list(self._fx):
-            if (sig[0], sig[1]) + sig[3:] not in current:
+            if (sig[0],) + sig[2:] not in current:
                 self._fx.pop(sig).deleteLater()
-        for sig, (key, shift) in wanted.items():
+        for sig, (clip, shift) in wanted.items():
             if sig not in self._fx and sig not in self._loading:
-                self._prepare(sig, key, shift)
+                self._prepare(sig, clip, shift)
 
     # ------------------------------------------------------------------ internals
-    def _prepare(self, sig: tuple, key: int, shift: float) -> None:
+    def _prepare(self, sig: tuple, clip: ClipSlot, shift: float) -> None:
         if sig in self._loading:
             return
         self._loading.add(sig)
         self._n += 1
         path = os.path.join(self._dir, f"pad{self._n}.wav")
         project = copy.deepcopy(self.state.project)
+        clip = copy.deepcopy(clip)
 
         def job():
-            y = render_slot_audio(project, key, shift)
+            y = render_clip_audio(project, clip, shift)
             sf.write(path, y.T, project.render.sample_rate, subtype="PCM_16")
             return path
 

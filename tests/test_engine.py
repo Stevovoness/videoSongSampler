@@ -293,7 +293,7 @@ def test_render_with_drums(media):
     prep = prepare(proj, song)
     hits = prep.plan.drum_instances
     assert len(hits) == 1 and hits[0].slot == drum_key(36)
-    assert abs(hits[0].duration - prep.sources[drum_key(36)].length) < 1e-9   # never stretched or cut
+    assert abs(hits[0].duration - prep.sources[(drum_key(36), 0)].length) < 1e-9   # never stretched or cut
     out = str(d / "out_drums.mp4")
     render_video(proj, song, out)
     with av.open(out) as c:
@@ -329,3 +329,95 @@ def test_musicxml_percussion_part(tmp_path):
     drum_evs = [e for e in song.events if e.drum]
     assert len(drum_evs) == 3
     assert [e.pitch for e in apply_options(song, SongOptions())] == [60, 64, 67]
+
+
+# ---------------------------------------------------------------- clip finder + takes
+from fixtures import make_long_clip  # noqa: E402
+
+from vsampler import clipfinder  # noqa: E402
+from vsampler.clips import load_audio  # noqa: E402
+from vsampler.models import Take  # noqa: E402
+
+LONG_NOTES = [(60, 0.5, 0.6), (64, 1.6, 0.6), (67, 2.7, 0.5), (60, 3.7, 0.6), (72, 4.8, 0.5), (64, 5.8, 0.6)]
+LONG_HITS = [7.0, 7.8]
+
+
+@pytest.fixture(scope="module")
+def long_video(tmp_path_factory):
+    d = tmp_path_factory.mktemp("long")
+    path = make_long_clip(d / "long.mp4", LONG_NOTES, LONG_HITS, total=8.8)
+    audio = load_audio(path)
+    return path, audio, clipfinder.analyse(audio)
+
+
+def test_finder_suggests_every_clip_point(long_video):
+    _, _, res = long_video
+    notes = [c for c in res.candidates if c.kind == "note"]
+    hits = [c for c in res.candidates if c.kind == "hit"]
+    for midi, start, _dur in LONG_NOTES:
+        found = [c for c in notes if abs(c.start - start) < 0.08]
+        assert found, f"no suggestion near {start}s"
+        assert abs(found[0].midi - midi) < 0.3
+    assert len(notes) == len(LONG_NOTES)
+    assert sorted(c.note for c in notes).count(60) == 2 and sorted(c.note for c in notes).count(64) == 2  # 2 takes
+    assert len(hits) == 2 and all(any(abs(h.start - t) < 0.06 for h in hits) for t in LONG_HITS)
+    best = clipfinder.best_takes(res.candidates)
+    assert sorted(res.candidates[i].note for i in best if res.candidates[i].kind == "note") == [60, 64, 67, 72]
+    assert res.duration == pytest.approx(8.8, abs=0.1) and len(res.peaks) > 100
+
+
+def test_finder_refine_after_move(long_video):
+    _, audio, res = long_video
+    c = next(c for c in res.candidates if c.note == 67)
+    midi, _conf, loud = clipfinder.refine(audio, SR, c.start + 2.1, c.end + 2.1)   # moved onto the C5 note
+    assert abs(midi - 72) < 0.3 and loud is not None
+
+
+def test_takes_rotate_and_tune_separately():
+    slot = ClipSlot("a.mp4", 0, 1, detected_midi=60.2,
+                    extra_takes=[Take("a.mp4", 2, 3, detected_midi=59.9), Take("b.mp4", 0, 1, detected_midi=60.0)])
+    p = make_plan([NoteEvent(i, i + 0.5, 60) for i in range(5)], {60: slot})
+    assert [i.take for i in p.instances] == [0, 1, 2, 0, 1]
+    assert [round(i.shift, 3) for i in p.instances[:3]] == [-0.2, 0.1, 0.0]
+    assert slot.take(1).trim_start == 2 and slot.take(2).path == "b.mp4" and slot.take(4).trim_start == 2
+
+
+def test_project_json_takes():
+    p = Project()
+    p.slots[60] = ClipSlot("long.mp4", 1.0, 1.5, extra_takes=[Take("long.mp4", 4.0, 4.6, 60.1)])
+    q = Project.from_json(p.to_json())
+    assert q.slots[60].take_count == 2 and q.slots[60].extra_takes[0].trim_start == 4.0
+    old = Project.from_json('{"slots": {"60": {"path": "a.mp4", "trim_start": 0.1}}}')
+    assert old.slots[60].extra_takes == []
+
+
+def test_sources_keep_many_clips_of_one_video(long_video):
+    from vsampler.render import sources
+    path, _, _ = long_video
+    a, b = ClipSlot(path, 0.5, 1.1), ClipSlot(path, 1.6, 2.2)
+    sa, sb = sources.get_source(a), sources.get_source(b)
+    assert sources.get_source(a) is sa and sources.get_source(b) is sb
+
+
+def test_render_from_one_long_video(long_video, tmp_path):
+    from vsampler.render.renderer import prepare
+    path, _, res = long_video
+    proj = Project()
+    for i in sorted(clipfinder.best_takes(res.candidates)):
+        c = res.candidates[i]
+        if c.kind == "note":
+            takes = [Take(path, o.start, o.end, o.midi, o.loudness_db) for o in res.candidates
+                     if o is not c and o.note == c.note]
+            proj.slots[c.note] = ClipSlot(path, c.start, c.end, c.midi, loudness_db=c.loudness_db, extra_takes=takes)
+    assert proj.slots[60].take_count == 2
+    mid = make_midi(tmp_path / "s.mid", [(60, 0, 0.5), (64, 0.5, 1.0), (60, 1.0, 1.5), (67, 1.5, 2.0)])
+    song = load_song(mid, proj.song)
+    prep = prepare(proj, song)
+    assert [(i.target, i.take) for i in prep.plan.instances] == [(60, 0), (64, 0), (60, 1), (67, 0)]
+    assert (60, 1) in prep.sources and prep.sources[(60, 0)].trim_start != prep.sources[(60, 1)].trim_start
+    proj.render.width, proj.render.height = 320, 180
+    out = str(tmp_path / "o.mp4")
+    render_video(proj, song, out)
+    a = load_audio(out)
+    pitch, _ = detect_pitch(a[:, int(0.6 * SR): int(0.95 * SR)])
+    assert abs(pitch - 64) < 0.3

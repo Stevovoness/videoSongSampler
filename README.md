@@ -15,6 +15,22 @@ Turn short video clips of single notes into a whole song, with a collage music v
    - **Collage grid**: every clip has a tile, and a tile lights up and plays when its note sounds.
    - **Only who's singing**: the screen splits between whichever clips are sounding right now.
 
+### Cut clips from a long video
+No need to record every note separately. Click **✂ Cut clips from a long video…** in Step 1 (or just add or drop
+any video longer than 10 seconds) and the clip finder listens to the whole thing. It **suggests every clip point at
+once**: each clearly sung or played note (often several takes of the same note) and each slap, clap or knock.
+- They're shown on a timeline with the sound wave and the pitch line, and in a list. Untick the ones you don't
+  want, drag a clip's edges to trim it, drag its middle to move it, or drag on an empty part of the timeline to
+  cut your own.
+- Pick the note or drum pad each clip becomes, click **♪ Hear it as in the video**, then **Add ticked clips**.
+- The **sensitivity** slider shows more or fewer suggestions.
+
+### Takes
+A note (or drum pad) can have several clips, called takes. When the song plays that note again, the video uses the
+next take, so the collage doesn't show the same moment every time. Pressing the key in Step 1 cycles through them
+too. In the clip details, ◀ ▶ browse the takes, and you can make one the main take, remove one, or add another.
+Several good takes of one note from the clip finder are added as takes automatically.
+
 ### Drums
 Switch Step 1 to **🥁 Drums** to put percussive clips (slaps, claps, smacks, knocks…) on drum pads, one per drum
 sound: kick, snare, hi-hat, toms, cymbals and the rest of the General MIDI kit. When a song has a drum part (a MIDI

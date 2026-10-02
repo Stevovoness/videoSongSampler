@@ -4,6 +4,26 @@ Every change gets a line here (see the workflow in [CLAUDE.md](../CLAUDE.md)). N
 **Unreleased** until a version is released.
 
 ## Unreleased
+
+## 1.3.0
+- **Clip finder:** give the app a longer video and it suggests every clip point in it in one go: every held,
+  clearly pitched note (often several takes of each) and every percussive hit.
+  - Everything shows on a zoomable timeline (waveform and pitch curve) and in a list, with a filter chip for each
+    note.
+  - Drag a block's edges to trim a clip, drag its middle to move it, or drag on empty space to cut your own. The
+    pitch is re-detected after each change.
+  - Choose the note or drum pad each clip becomes, hear it as it will sound in the video, and add all ticked clips
+    at once. Opens from "✂ Cut clips from a long video…" in Step 1, or automatically for any video longer than
+    10 seconds.
+  - Engine: `vsampler/clipfinder.py`. GUI: `gui/clip_finder.py` and `gui/widgets/timeline.py`.
+- **Takes:** a note or pad can hold several clips, used in turn each time the song plays that note (and each time
+  you press the key). Each take is auto-tuned on its own.
+  - In Step 1 you can browse the takes (◀ ▶), make one the main take, remove one, or add another ("＋ Add take…").
+  - Keys and pads with several takes show "×N".
+  - "✂ Adjust in the video…" re-opens a take in the clip finder.
+- Clips cut from the same video each get their own thumbnail and cached frames (the clip-source cache is now an LRU
+  instead of one entry per file).
+- Project files gain `extra_takes` on each clip. Older files still open.
 - Added a `docs/` folder (architecture, release steps, this changelog), plus agent instructions in `CLAUDE.md` and
   `AGENTS.md`: update the docs, then commit and push after every change.
 - `main.py` started with a Python that lacks the app's packages now explains how to run it with `.venv`, instead

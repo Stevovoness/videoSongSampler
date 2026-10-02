@@ -20,6 +20,11 @@ class ClipError(Exception):
     pass
 
 
+def trim_thumb_key(slot) -> str:
+    """Thumbnail cache key for one clip: many clips can be cut from the same long video."""
+    return f"{slot.path}|{slot.trim_start:.3f}"
+
+
 def _rotate(img: np.ndarray, rotation: int) -> np.ndarray:
     k = int(round(rotation / 90.0)) % 4
     return np.ascontiguousarray(np.rot90(img, k)) if k else img
@@ -128,6 +133,15 @@ class ClipAnalysis:
     trim_end: float
     thumbnail: np.ndarray | None  # RGB
     loudness_db: float | None = None
+
+
+def video_duration(path: str) -> float:
+    """Length of a media file in seconds (from its header; nothing is decoded)."""
+    with av.open(path) as c:
+        if c.duration:
+            return c.duration / 1e6
+        st = (c.streams.audio or c.streams.video)[0]
+        return float(st.duration * st.time_base) if st.duration else 0.0
 
 
 def grab_frame(path: str, t: float, max_side: int = 320) -> np.ndarray | None:

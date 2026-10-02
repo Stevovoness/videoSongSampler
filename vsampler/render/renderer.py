@@ -28,8 +28,12 @@ class Cancelled(Exception):
 @dataclass
 class Prepared:
     plan: Plan
-    sources: dict[int, ClipSource]
+    sources: dict[tuple[int, int], ClipSource]   # (slot key, take) -> clip
     duration: float
+
+    @property
+    def tile_slots(self) -> list[int]:
+        return sorted({k for k, _ in self.sources})
 
 
 def _noop(_f: float, _m: str) -> None:
@@ -46,6 +50,11 @@ def project_slot(project: Project, key: int) -> ClipSlot:
     return project.drum_slots[drum_note(key)] if is_drum_key(key) else project.slots[key]
 
 
+def project_take(project: Project, key: int, take: int = 0) -> ClipSlot:
+    """One take of the clip behind a slot key, as a plain ClipSlot."""
+    return project_slot(project, key).take(take)
+
+
 def all_slot_keys(project: Project) -> list[int]:
     return sorted(project.slots) + sorted(drum_key(n) for n in project.drum_slots)
 
@@ -59,12 +68,11 @@ def slot_gain_db(project: Project, slot: ClipSlot, audio: np.ndarray) -> float:
     return gain_db
 
 
-def render_slot_audio(project: Project, key: int, shift: float = 0.0) -> np.ndarray:
-    """One full hit of a clip exactly as the renderer makes it (trim, auto-tune / shift, volume levelling).
+def render_clip_audio(project: Project, slot: ClipSlot, shift: float = 0.0) -> np.ndarray:
+    """One full hit of any clip exactly as the renderer makes it (trim, auto-tune / shift, volume levelling).
 
-    Used by the clickable sample pad.
+    `slot` needn't be in the project yet (the clip finder previews clips before they're added).
     """
-    slot = project_slot(project, key)
     audio = trimmed_audio(slot)
     sr = project.render.sample_rate
     y = audio_dsp.render_note(source_key(slot), audio, sr, audio.shape[1] / sr, shift)
@@ -75,6 +83,11 @@ def render_slot_audio(project: Project, key: int, shift: float = 0.0) -> np.ndar
     return y.astype(np.float32)
 
 
+def render_slot_audio(project: Project, key: int, shift: float = 0.0, take: int = 0) -> np.ndarray:
+    """One take of a slot as the clickable sample pad plays it."""
+    return render_clip_audio(project, project_take(project, key, take), shift)
+
+
 def prepare(project: Project, song: Song, progress: ProgressFn = _noop,
             cancel: threading.Event | None = None, all_slots: bool = False) -> Prepared:
     events = apply_options(song, project.song, include_drums=bool(project.drum_slots))
@@ -82,17 +95,17 @@ def prepare(project: Project, song: Song, progress: ProgressFn = _noop,
     if not plan.instances:
         raise ValueError("None of the song's notes have a clip. Add clips for the notes shown in red, "
                          "or turn on 'Octave jump' / 'Use nearest clip and pitch-shift'.")
-    used = sorted({i.slot for i in plan.instances})
+    used = sorted({(i.slot, i.take) for i in plan.instances})
     if all_slots or not project.render.only_used_clips:
-        used = all_slot_keys(project)
-    sources: dict[int, ClipSource] = {}
-    for n, key in enumerate(used):
+        used = [(k, t) for k in all_slot_keys(project) for t in range(project_slot(project, k).take_count)]
+    sources: dict[tuple[int, int], ClipSource] = {}
+    for n, (key, take) in enumerate(used):
         _check(cancel)
         progress(n / max(1, len(used)), f"Loading clip {n + 1} of {len(used)}…")
-        sources[key] = get_source(project_slot(project, key))
+        sources[(key, take)] = get_source(project_take(project, key, take))
     for inst in plan.instances:
         if inst.drum:   # a drum hit always plays its whole clip, as recorded (never cut short or stretched)
-            inst.duration = sources[inst.slot].length
+            inst.duration = sources[(inst.slot, inst.take)].length
     duration = max(i.start + i.duration for i in plan.instances) + project.render.tail
     return Prepared(plan, sources, duration)
 
@@ -106,9 +119,9 @@ def mix_audio(project: Project, prep: Prepared, progress: ProgressFn = _noop,
         _check(cancel)
         if n % 8 == 0:
             progress(n / max(1, len(insts)), f"Making note {n + 1} of {len(insts)}…")
-        src = prep.sources[inst.slot]
+        src = prep.sources[(inst.slot, inst.take)]
         y = audio_dsp.render_note(src.key, src.audio, sr, inst.duration, inst.shift)
-        gain = 10 ** (slot_gain_db(project, project_slot(project, inst.slot), src.audio) / 20)
+        gain = 10 ** (slot_gain_db(project, project_take(project, inst.slot, inst.take), src.audio) / 20)
         if project.render.velocity_volume:
             gain *= 0.35 + 0.65 * inst.velocity
         a = int(inst.start * sr)
@@ -131,7 +144,7 @@ def render_audio_preview(project: Project, song: Song, wav_path: str, progress: 
 
 def preview_frame(project: Project, song: Song, t: float) -> np.ndarray:
     prep = prepare(project, song)
-    comp = Compositor(prep.plan.instances, prep.sources, sorted(prep.sources), project.render)
+    comp = Compositor(prep.plan.instances, prep.sources, prep.tile_slots, project.render)
     return comp.frame(t)
 
 
@@ -141,7 +154,7 @@ def render_video(project: Project, song: Song, out_path: str, progress: Progress
     W, H = rs.width // 2 * 2, rs.height // 2 * 2
     prep = prepare(project, song, lambda f, m: progress(f * 0.1, m), cancel)
     audio = mix_audio(project, prep, lambda f, m: progress(0.1 + f * 0.3, m), cancel)
-    comp = Compositor(prep.plan.instances, prep.sources, sorted(prep.sources), rs)
+    comp = Compositor(prep.plan.instances, prep.sources, prep.tile_slots, rs)
 
     sr = rs.sample_rate
     n_frames = int(np.ceil(prep.duration * rs.fps))

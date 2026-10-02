@@ -25,6 +25,7 @@ class DrumPads(QWidget):
         self.standin: dict[int, int] = {}        # needed note -> note whose clip stands in
         self.thumbs: dict[int, QPixmap] = {}
         self.letters: dict[int, str] = {}
+        self.takes: dict[int, int] = {}          # pads with several takes -> how many
         self.show_all = False
         self.selected: int | None = None
         self._lit: set[int] = set()
@@ -135,6 +136,13 @@ class DrumPads(QWidget):
                 p.setPen(Qt.NoPen)
                 p.setBrush(color)
                 p.drawEllipse(QRectF(r.right() - 16, r.top() + 8, 9, 9))
+            # several takes
+            n_takes = self.takes.get(note, 1)
+            if n_takes > 1:
+                f.setPointSizeF(8)
+                p.setFont(f)
+                p.setPen(QColor(theme.TEXT))
+                p.drawText(r.adjusted(8, 6, -8, -6), Qt.AlignLeft | Qt.AlignBottom, f"×{n_takes} takes")
             # computer key
             letter = self.letters.get(note)
             if letter:

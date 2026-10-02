@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import numpy as np
@@ -26,7 +27,8 @@ class ClipSource:
 
 _lock = threading.Lock()
 _audio_cache: dict[str, np.ndarray] = {}
-_sources: dict[str, ClipSource] = {}
+_sources: OrderedDict[str, ClipSource] = OrderedDict()
+_MAX_SOURCES = 96
 
 
 def source_key(slot: ClipSlot) -> str:
@@ -67,16 +69,19 @@ def get_source(slot: ClipSlot) -> ClipSource:
     key = source_key(slot)
     with _lock:
         src = _sources.get(key)
+        if src is not None:
+            _sources.move_to_end(key)
     if src is not None:
         return src
     seg, t0, t1 = _trimmed(slot)
     frames = ClipFrames(slot.path, t0, t1 + 0.1)
     src = ClipSource(key, np.ascontiguousarray(seg), frames, t0, seg.shape[1] / SR)
     with _lock:
-        # drop stale entries for the same file with old trims
-        for k in [k for k in _sources if k.split("|")[0] == slot.path]:
-            del _sources[k]
+        # many clips can come from one long video, so keep the most recently used ones (not one per file)
         _sources[key] = src
+        _sources.move_to_end(key)
+        while len(_sources) > _MAX_SOURCES:
+            _sources.popitem(last=False)
     return src
 
 

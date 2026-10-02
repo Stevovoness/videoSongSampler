@@ -28,7 +28,7 @@ class AppState(QObject):
         super().__init__()
         self.project = Project()
         self.song: Song | None = None
-        self.thumbs: dict[str, QPixmap] = {}       # clip path -> thumbnail
+        self.thumbs: dict[str, QPixmap] = {}       # clips.trim_thumb_key(clip) -> thumbnail
         self.confidence: dict[str, float] = {}
         self.project_path: str = ""
         self.dirty = False

@@ -18,8 +18,9 @@ MIN_VISIBLE = 0.12   # very short notes stay lit at least this long
 
 
 class Compositor:
-    def __init__(self, instances: list[NoteInstance], sources: dict[int, ClipSource],
+    def __init__(self, instances: list[NoteInstance], sources: dict[tuple[int, int], ClipSource],
                  tile_slots: list[int], settings: RenderSettings):
+        """`sources` is keyed by (slot key, take); there is one tile per slot key, showing whichever take plays."""
         self.s = settings
         self.W, self.H = settings.width, settings.height
         self.sources = sources
@@ -30,7 +31,8 @@ class Compositor:
         self.hl = hex_to_bgr(settings.highlight)
         aspects = sorted(src.aspect for src in sources.values()) or [16 / 9]
         self.aspect = aspects[len(aspects) // 2]
-        self.tile_slots = [s for s in tile_slots if s in sources]
+        loaded = {k for k, _ in sources}
+        self.tile_slots = [s for s in tile_slots if s in loaded]
         self._last = None
         self._dyn_rects: dict[int, list] = {}
         if settings.layout == "grid":
@@ -49,11 +51,15 @@ class Compositor:
         return out
 
     def _clip_frame(self, inst: NoteInstance, t: float) -> np.ndarray:
-        src = self.sources[inst.slot]
+        src = self.sources[(inst.slot, inst.take)]
         local = min(t - inst.start, inst.duration)
         src_t = src.trim_start + time_map(local, inst.duration, src.length)
         slow = inst.duration > src.length * 1.2
         return src.frames.at(src_t, blend=self.s.smooth_slowmo and slow)
+
+    def _first_source(self, slot: int) -> ClipSource:
+        """The take a tile shows while idle (take 0 if it's loaded)."""
+        return self.sources.get((slot, 0)) or next(s for (k, _), s in sorted(self.sources.items()) if k == slot)
 
     @staticmethod
     def _label(inst: NoteInstance) -> str:
@@ -70,7 +76,7 @@ class Compositor:
         base[:] = self.bg
         for slot, (x, y, w, h) in self.rects.items():
             if self.s.idle_mode == "dim":
-                tile = cover(self.sources[slot].frames.get(0), w, h)
+                tile = cover(self._first_source(slot).frames.get(0), w, h)
                 tile = (tile.astype(np.float32) * 0.33).astype(np.uint8)
             else:
                 tile = np.full((h, w, 3), [int(c * 0.6 + 12) for c in self.bg], np.uint8)
