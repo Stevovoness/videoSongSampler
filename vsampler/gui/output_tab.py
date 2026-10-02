@@ -156,7 +156,7 @@ class OutputTab(QWidget):
         pl = QVBoxLayout(pbox)
         self.preview = QLabel("Load clips and a song, then click “Update preview”.")
         self.preview.setAlignment(Qt.AlignCenter)
-        self.preview.setMinimumSize(420, 260)
+        self.preview.setMinimumSize(300, 180)
         self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.preview.setStyleSheet("background:#0b0b0d; border-radius:8px; color:#888;")
         pl.addWidget(self.preview, 1)

@@ -187,7 +187,7 @@ class ClipsTab(QWidget):
         # ---- keyboard / drum pads
         self.stack = QStackedWidget()
         self.keys = PianoKeyboard(48, 84)
-        self.keys.setMinimumHeight(170)
+        self.keys.setMinimumHeight(120)
         self.keys.describe = self._describe_key
         self.keys.key_clicked.connect(self._clicked)
         self.keys.files_dropped.connect(lambda m, paths: self.add_video(paths[0], m, drum=False))
@@ -196,7 +196,7 @@ class ClipsTab(QWidget):
         self.pads.files_dropped.connect(lambda n, paths: self.add_video(paths[0], n, drum=True))
         self.stack.addWidget(self.keys)
         self.stack.addWidget(self.pads)
-        self.stack.setMinimumHeight(200)
+        self.stack.setMinimumHeight(140)
         root.addWidget(self.stack)
         self.kb_hint = hint("")
         root.addWidget(self.kb_hint)
@@ -262,15 +262,17 @@ class ClipsTab(QWidget):
         # video preview
         vcol = QVBoxLayout()
         self.video = QVideoWidget()
-        self.video.setMinimumSize(320, 200)
+        self.video.setMinimumSize(240, 140)
         self.video.setStyleSheet("background:#000; border-radius:8px;")
         self.vplayer = QMediaPlayer(self)
         self.vaudio = QAudioOutput(self)
         self.vplayer.setAudioOutput(self.vaudio)
         self.vplayer.setVideoOutput(self.video)
-        self._vstop = QTimer(self)
+        self._vend: float | None = None   # pause the preview when it reaches this time (s)
+        self._vstop = QTimer(self)        # backstop in case the position never gets there
         self._vstop.setSingleShot(True)
-        self._vstop.timeout.connect(self.vplayer.pause)
+        self._vstop.timeout.connect(self._pause_video)
+        self.vplayer.positionChanged.connect(self._video_position)
         vcol.addWidget(self.video, 1)
         prow = QHBoxLayout()
         self.play_btn = QPushButton("▶  Play clip")
@@ -573,10 +575,24 @@ class ClipsTab(QWidget):
             return
         self._load_video(s)
         self.vaudio.setMuted(True)
+        self._play_span(s)
+
+    def _play_span(self, s) -> None:
+        """Play a take's trimmed part of its video. Seeking is asynchronous, so stop by position, not by time."""
+        end = s.trim_end if s.trim_end is not None else s.trim_start + 2.0
+        self._vend = end
         self.vplayer.setPosition(int(s.trim_start * 1000))
         self.vplayer.play()
-        end = s.trim_end if s.trim_end is not None else s.trim_start + 2.0
-        self._vstop.start(int(max(0.05, end - s.trim_start) * 1000))
+        self._vstop.start(int(max(0.05, end - s.trim_start) * 1000) + 2500)
+
+    def _video_position(self, ms: int) -> None:
+        if self._vend is not None and ms / 1000 >= self._vend and                 self.vplayer.playbackState() == QMediaPlayer.PlayingState:
+            self._pause_video()
+
+    def _pause_video(self) -> None:
+        self._vend = None
+        self._vstop.stop()
+        self.vplayer.pause()
 
     # ------------------------------------------------------------------ selection
     def _clicked(self, n: int) -> None:
@@ -794,13 +810,11 @@ class ClipsTab(QWidget):
         if not s:
             return
         self._load_video(s)
-        self._vstop.stop()
         if self.vplayer.playbackState() == QMediaPlayer.PlayingState:
-            self.vplayer.pause()
+            self._pause_video()
             return
         self.vaudio.setMuted(False)
-        self.vplayer.setPosition(int(s.trim_start * 1000))
-        self.vplayer.play()
+        self._play_span(s)
 
     # ------------------------------------------------------------------ adding clips
     def choose_for_selected(self) -> None:

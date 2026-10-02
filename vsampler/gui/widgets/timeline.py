@@ -49,7 +49,7 @@ class Timeline(QWidget):
         self._drag = None               # (mode, index, t_at_press, start0, end0)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
-        self.setMinimumHeight(220)
+        self.setMinimumHeight(150)
         self.bar = QScrollBar(Qt.Horizontal, self)
         self.bar.valueChanged.connect(self._scrolled)
 

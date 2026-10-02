@@ -4,6 +4,18 @@ Every change gets a line here (see the workflow in [CLAUDE.md](../CLAUDE.md)). N
 **Unreleased** until a version is released.
 
 ## Unreleased
+
+## 1.3.1
+- **Windows always fit the screen.** An app-wide guard (`gui/screen.py`) shrinks and moves every window, dialog and
+  message box so it stays inside the visible screen area. Big windows start at a size relative to the screen,
+  and each step and the clip finder scroll instead of growing past the edge. The clip finder's buttons sit in a
+  fixed footer that is always visible, and a draggable divider sits between its timeline and the list.
+- **Sample pad plays every press.** It now mixes sounds itself and streams them straight to the sound card
+  (`QAudioSink`), instead of using `QSoundEffect`, which on Windows sometimes ignored a restart or played nothing.
+  Presses overlap, and pressing again restarts the sound cleanly.
+- **"Play clip" no longer goes silent.** Video previews (in the clip finder and Step 1) now stop when the video
+  reaches the clip's end, instead of after a timer that could run out while the video was still seeking.
+- Background jobs whose window was closed no longer print errors.
 - `build_exe.py` keeps PyInstaller's scratch and output folders in `%LOCALAPPDATA%\VideoSampler-build`. OneDrive
   was locking `build\` and `dist\` and making the build fail with "Access is denied". The installer script takes
   the output folder as `/DSourceDir`.

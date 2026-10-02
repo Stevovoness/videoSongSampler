@@ -33,7 +33,7 @@ class DrumPads(QWidget):
         self._drop: int | None = None
         self.setMouseTracking(True)
         self.setAcceptDrops(True)
-        self.setMinimumHeight(200)
+        self.setMinimumHeight(140)
 
     # ------------------------------------------------------------ state
     def set_state(self, assigned: set[int], needed: set[int], standin: dict[int, int],

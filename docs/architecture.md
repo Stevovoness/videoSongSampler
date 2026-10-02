@@ -42,9 +42,13 @@ The GUI (`vsampler/gui/`) edits a single `Project` held by `AppState`. It listen
   if the project has drum clips (`songops.default_tracks`).
 - **Stretching:** when a note is longer than its clip, `audio_dsp.render_note` time-stretches it (Rubber Band,
   attack kept intact). `audio_dsp.time_map` keeps the video in sync.
-- **Sample pad** (`gui/widgets/sampler.py`): renders each clip once with `renderer.render_slot_audio` (audio only,
-  using the same gain and levelling as the render), saves it as a WAV and plays it with `QSoundEffect` for low
-  latency. `warm()` gets every clip ready after the slots change.
+- **Sample pad** (`gui/widgets/sampler.py`): renders each clip once with `renderer.render_clip_audio` (same gain
+  and levelling as the render) and keeps it in memory. A small mixer (`_Mixer`, a `QIODevice`) streams to a
+  `QAudioSink` in pull mode, so presses overlap and restart reliably. `warm()` gets every take ready after the
+  slots change. Don't go back to `QSoundEffect`: restarting it is unreliable on Windows.
+- **Screen fitting** (`gui/screen.py`): `ScreenGuard` is installed on the app in `main.py` and keeps every
+  top-level window inside the screen's available area. It also caps the minimum size Qt derives from the layout.
+  Use `preferred_size()` for a window's starting size and `scrollable()` around big content.
 
 ## Files
 | Path | What it does |

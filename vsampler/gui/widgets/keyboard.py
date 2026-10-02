@@ -31,7 +31,7 @@ class PianoKeyboard(QWidget):
         self._drop: int | None = None
         self.setMouseTracking(True)
         self.setAcceptDrops(True)
-        self.setMinimumHeight(150)
+        self.setMinimumHeight(110)
 
     def set_range(self, lo: int, hi: int) -> None:
         while is_black(lo):

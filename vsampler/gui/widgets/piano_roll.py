@@ -121,7 +121,7 @@ class PianoRoll(QScrollArea):
         self.canvas = _Canvas()
         self.setWidget(self.canvas)
         self.setWidgetResizable(False)
-        self.setMinimumHeight(180)
+        self.setMinimumHeight(140)
 
     def set_events(self, events, plan) -> None:
         vp = self.viewport().size()

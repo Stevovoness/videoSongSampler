@@ -1,27 +1,81 @@
 """Low-latency sample pad: plays a clip exactly as it will sound in the rendered video.
 
 Each (clip, trim, shift, volume) combination is rendered once in the background with the same code the
-renderer uses, written to a WAV and loaded into a QSoundEffect, which starts playing with very little delay.
-Different keys can sound at the same time; pressing a key again restarts it. A slot with several takes plays
-them in turn, just like the video does.
+renderer uses and kept in memory. A small mixer streams straight to the sound card (QAudioSink in pull mode), so
+every press sounds immediately: different keys overlap, and pressing a key again restarts it. A slot with several
+takes plays them in turn, just like the video does.
 """
 from __future__ import annotations
 
 import copy
-import os
-import shutil
-import tempfile
-from collections import Counter
+import threading
+from collections import Counter, OrderedDict
 
-import soundfile as sf
-from PySide6.QtCore import QObject, QUrl, Signal
-from PySide6.QtMultimedia import QSoundEffect
+import numpy as np
+from PySide6.QtCore import QIODevice, QObject, Signal
+from PySide6.QtMultimedia import QAudio, QAudioFormat, QAudioSink, QMediaDevices
 
 from ...drums import is_drum_key
 from ...models import ClipSlot
 from ...render import sources
 from ...render.renderer import all_slot_keys, project_slot, render_clip_audio
 from ..worker import run_task
+
+_CACHE_MAX = 300           # rendered sounds kept in memory (~350 KB per second of sound)
+_LATENCY = 0.04            # seconds of audio buffered by the sound card
+
+
+class _Mixer(QIODevice):
+    """Mixes the sounds that are playing and hands them to the sound card on request."""
+
+    def __init__(self, channels: int, fmt: QAudioFormat.SampleFormat):
+        super().__init__()
+        self.channels, self.fmt = channels, fmt
+        self.voices: dict[object, list] = {}      # key -> [float32 array (n, ch), position]
+        self.lock = threading.Lock()
+        self.frames_out = 0
+        self.open(QIODevice.ReadOnly)
+
+    def play(self, key, data: np.ndarray) -> None:
+        with self.lock:
+            self.voices[key] = [data, 0]         # same key again: restart it
+
+    def stop_all(self) -> None:
+        with self.lock:
+            self.voices.clear()
+
+    def isSequential(self) -> bool:
+        return True
+
+    def bytesAvailable(self) -> int:
+        return 1 << 16
+
+    def readData(self, maxlen: int) -> bytes:
+        width = 2 if self.fmt == QAudioFormat.Int16 else 4
+        frames = maxlen // (width * self.channels)
+        if frames <= 0:
+            return b""
+        out = np.zeros((frames, self.channels), np.float32)
+        with self.lock:
+            for key in list(self.voices):
+                data, pos = self.voices[key]
+                chunk = data[pos: pos + frames]
+                out[: len(chunk)] += chunk
+                pos += len(chunk)
+                if pos >= len(data):
+                    del self.voices[key]
+                else:
+                    self.voices[key][1] = pos
+        self.frames_out += frames
+        np.clip(out, -1.0, 1.0, out=out)
+        if self.fmt == QAudioFormat.Int16:
+            return (out * 32767).astype(np.int16).tobytes()
+        if self.fmt == QAudioFormat.Int32:
+            return (out * 2147483647).astype(np.int32).tobytes()
+        return out.tobytes()
+
+    def writeData(self, _data) -> int:
+        return -1
 
 
 class SamplePad(QObject):
@@ -30,15 +84,62 @@ class SamplePad(QObject):
     def __init__(self, state, parent=None):
         super().__init__(parent)
         self.state = state
-        self._dir = tempfile.mkdtemp(prefix="vs_pad_")
-        self._fx: dict[tuple, QSoundEffect] = {}
+        self._sounds: OrderedDict[tuple, np.ndarray] = OrderedDict()   # sig -> audio ready for the sound card
         self._loading: set[tuple] = set()
         self._play_when_ready: set[tuple] = set()
         self._presses: Counter = Counter()     # slot key -> presses so far (picks the take)
-        self._n = 0
+        self._sink: QAudioSink | None = None
+        self._mixer: _Mixer | None = None
+        self._rate, self._channels = 44100, 2
+        self._open_output()
 
-    def __del__(self):
-        shutil.rmtree(getattr(self, "_dir", ""), ignore_errors=True)
+    # ------------------------------------------------------------------ output
+    def _open_output(self) -> None:
+        device = QMediaDevices.defaultAudioOutput()
+        if device.isNull():
+            return
+        fmt = QAudioFormat()
+        fmt.setSampleRate(44100)
+        fmt.setChannelCount(2)
+        fmt.setSampleFormat(QAudioFormat.Int16)
+        if not device.isFormatSupported(fmt):
+            fmt = device.preferredFormat()
+            if fmt.sampleFormat() not in (QAudioFormat.Int16, QAudioFormat.Int32, QAudioFormat.Float):
+                fmt.setSampleFormat(QAudioFormat.Float)
+        self._rate, self._channels = fmt.sampleRate(), max(1, fmt.channelCount())
+        self._mixer = _Mixer(self._channels, fmt.sampleFormat())
+        self._sink = QAudioSink(device, fmt, self)
+        width = 2 if fmt.sampleFormat() == QAudioFormat.Int16 else 4
+        self._sink.setBufferSize(int(self._rate * _LATENCY) * self._channels * width)
+        self._sink.stateChanged.connect(self._sink_state)
+        self._sink.start(self._mixer)
+
+    def _sink_state(self, st) -> None:
+        # the sink stops if the sound device goes away or errors: try to restart it
+        if st == QAudio.StoppedState and self._sink is not None and self._sink.error() != QAudio.NoError:
+            self._sink.deleteLater()
+            self._sink = None
+            self._open_output()
+
+    def _to_device(self, y: np.ndarray, sr: int) -> np.ndarray:
+        """Stereo (2, n) float audio -> (n, channels) at the sound card's rate."""
+        if sr != self._rate:
+            n = int(round(y.shape[1] * self._rate / sr))
+            x_old = np.linspace(0, 1, y.shape[1], endpoint=False)
+            x_new = np.linspace(0, 1, n, endpoint=False)
+            y = np.stack([np.interp(x_new, x_old, ch) for ch in y])
+        if self._channels == 1:
+            out = y.mean(axis=0)[:, None]
+        elif self._channels == 2:
+            out = y.T
+        else:
+            out = np.zeros((y.shape[1], self._channels), np.float32)
+            out[:, :2] = y.T
+        return np.ascontiguousarray(out, dtype=np.float32)
+
+    def stop_all(self) -> None:
+        if self._mixer is not None:
+            self._mixer.stop_all()
 
     def _sig(self, clip: ClipSlot, shift: float) -> tuple:
         return (sources.source_key(clip), round(shift, 3), round(clip.gain_db, 2),
@@ -65,57 +166,51 @@ class SamplePad(QObject):
     def trigger_clip(self, clip: ClipSlot, shift: float = 0.0) -> None:
         """Play any clip (it needn't be in the project yet), tuned and levelled like the render."""
         sig = self._sig(clip, shift)
-        fx = self._fx.get(sig)
-        if fx is not None and fx.status() == QSoundEffect.Status.Ready:
-            fx.stop()
-            fx.play()
+        data = self._sounds.get(sig)
+        if data is not None:
+            self._sounds.move_to_end(sig)
+            if self._mixer is not None:
+                self._mixer.play(sig, data)
             return
         self._play_when_ready.add(sig)
-        if fx is None:
-            self._prepare(sig, clip, shift)
+        self._prepare(sig, clip, shift)
+
+    def is_ready(self, clip: ClipSlot, shift: float = 0.0) -> bool:
+        return self._sig(clip, shift) in self._sounds
 
     def warm(self) -> None:
-        """Get every take of every clip ready to play, and drop sounds for clips that changed."""
-        wanted = {}
+        """Get every take of every clip ready to play."""
         project = self.state.project
         for key in all_slot_keys(project):
             slot = project_slot(project, key)
             for t in range(slot.take_count):
                 clip = slot.take(t)
-                if os.path.exists(clip.path):
-                    shift = 0.0 if is_drum_key(key) else clip.autotune_shift(key)
-                    wanted[self._sig(clip, shift)] = (clip, shift)
-        # a sound stays valid while its clip, trim and volume settings are unchanged (any shift)
-        current = {(s[0],) + s[2:] for s in wanted}
-        for sig in list(self._fx):
-            if (sig[0],) + sig[2:] not in current:
-                self._fx.pop(sig).deleteLater()
-        for sig, (clip, shift) in wanted.items():
-            if sig not in self._fx and sig not in self._loading:
-                self._prepare(sig, clip, shift)
+                shift = 0.0 if is_drum_key(key) else clip.autotune_shift(key)
+                sig = self._sig(clip, shift)
+                if sig not in self._sounds:
+                    self._prepare(sig, clip, shift)
 
     # ------------------------------------------------------------------ internals
     def _prepare(self, sig: tuple, clip: ClipSlot, shift: float) -> None:
         if sig in self._loading:
             return
         self._loading.add(sig)
-        self._n += 1
-        path = os.path.join(self._dir, f"pad{self._n}.wav")
         project = copy.deepcopy(self.state.project)
         clip = copy.deepcopy(clip)
+        sr = project.render.sample_rate
 
         def job():
-            y = render_clip_audio(project, clip, shift)
-            sf.write(path, y.T, project.render.sample_rate, subtype="PCM_16")
-            return path
+            return self._to_device(render_clip_audio(project, clip, shift), sr)
 
-        def done(p):
+        def done(data):
             self._loading.discard(sig)
-            fx = QSoundEffect(self)
-            fx.setVolume(1.0)
-            fx.statusChanged.connect(lambda: self._status(sig, fx))
-            self._fx[sig] = fx
-            fx.setSource(QUrl.fromLocalFile(p))
+            self._sounds[sig] = data
+            while len(self._sounds) > _CACHE_MAX:
+                self._sounds.popitem(last=False)
+            if sig in self._play_when_ready:
+                self._play_when_ready.discard(sig)
+                if self._mixer is not None:
+                    self._mixer.play(sig, data)
 
         def fail(e, _tb):
             self._loading.discard(sig)
@@ -123,10 +218,3 @@ class SamplePad(QObject):
             self.failed.emit(str(e))
 
         run_task(job, on_done=done, on_error=fail)
-
-    def _status(self, sig: tuple, fx: QSoundEffect) -> None:
-        if fx.status() == QSoundEffect.Status.Ready and sig in self._play_when_ready:
-            self._play_when_ready.discard(sig)
-            fx.play()
-        elif fx.status() == QSoundEffect.Status.Error:
-            self._play_when_ready.discard(sig)

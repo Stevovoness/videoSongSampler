@@ -41,6 +41,9 @@ fits together.
   only where something isn't obvious.
 - The engine (`vsampler/*.py`, `vsampler/render/`, `vsampler/importers/`) must not import Qt. Only `vsampler/gui/`
   uses PySide6.
+- No window may extend past the screen. Size new windows with `gui/screen.preferred_size()`, wrap large content
+  in `gui/screen.scrollable()`, keep important buttons outside the scrolling part, and avoid big fixed minimum
+  sizes. `ScreenGuard` (installed in `main.py`) is the safety net.
 - User-facing text is friendly and non-technical (the app is aimed at non-musicians).
 - Save files (`.vsproj`) must stay backward compatible. `Project.from_json` ignores unknown fields and fills in
   missing ones.

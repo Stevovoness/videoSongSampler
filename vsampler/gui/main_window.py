@@ -11,6 +11,7 @@ from .. import APP_NAME, __version__, audio_dsp
 from ..models import Project
 from ..paths import asset, find_audiveris
 from .clips_tab import ClipsTab
+from .screen import preferred_size, scrollable
 from .output_tab import OutputTab
 from .song_tab import SongTab
 from .state import AppState
@@ -51,15 +52,16 @@ class MainWindow(QMainWindow):
         ico = asset("icon.ico")
         if ico.exists():
             self.setWindowIcon(QIcon(str(ico)))
-        self.resize(1320, 900)
+        self.resize(preferred_size(None, 1320, 900))
 
         self.tabs = QTabWidget()
         self.clips = ClipsTab(self.state)
         self.song = SongTab(self.state)
         self.output = OutputTab(self.state)
-        self.tabs.addTab(self.clips, "  1 · Your sounds  ")
-        self.tabs.addTab(self.song, "  2 · The song  ")
-        self.tabs.addTab(self.output, "  3 · Make the video  ")
+        # each step scrolls rather than pushing the window past the edge of a small screen
+        self.tabs.addTab(scrollable(self.clips), "  1 · Your sounds  ")
+        self.tabs.addTab(scrollable(self.song), "  2 · The song  ")
+        self.tabs.addTab(scrollable(self.output), "  3 · Make the video  ")
         self.setCentralWidget(self.tabs)
 
         self._menus()

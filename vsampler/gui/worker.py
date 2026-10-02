@@ -25,17 +25,23 @@ class Task(QRunnable):
         self.signals = _Signals()
         self.setAutoDelete(False)
 
+    def _emit(self, signal, *args) -> None:
+        try:
+            signal.emit(*args)
+        except RuntimeError:   # the window that started the job was closed and deleted: nobody to tell
+            self.cancel.set()
+
     def run(self) -> None:
         try:
             kw = dict(self.kwargs)
             if self.with_progress:
-                kw["progress"] = lambda f, m: self.signals.progress.emit(float(f), str(m))
+                kw["progress"] = lambda f, m: self._emit(self.signals.progress, float(f), str(m))
                 kw["cancel"] = self.cancel
             result = self.fn(*self.args, **kw)
         except BaseException as e:  # noqa: BLE001
-            self.signals.error.emit(e, traceback.format_exc())
+            self._emit(self.signals.error, e, traceback.format_exc())
         else:
-            self.signals.done.emit(result)
+            self._emit(self.signals.done, result)
 
 
 _alive: set[Task] = set()

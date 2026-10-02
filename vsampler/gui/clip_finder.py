@@ -13,7 +13,7 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QDialog, QDoubleSpinBox, QFormLayout, QGroupBox,
                                QHBoxLayout, QLabel, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSlider,
-                               QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+                               QSizePolicy, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .. import clipfinder
 from ..clipfinder import Candidate, FinderCancelled, FinderResult
@@ -22,6 +22,7 @@ from ..drums import drum_short
 from ..models import ClipSlot, Take
 from ..notes import describe_detected, midi_to_name
 from ..render import sources
+from .screen import preferred_size, scrollable
 from .widgets.timeline import Timeline, item_label
 from .worker import run_task
 
@@ -59,8 +60,11 @@ class ClipFinderDialog(QDialog):
 
         self.setWindowTitle(f"Clip finder — {os.path.basename(path)}")
         self.setModal(False)
-        self.resize(1240, 860)
-        root = QVBoxLayout(self)
+        self.resize(preferred_size(parent, 1240, 860))
+        outer = QVBoxLayout(self)
+        body = QWidget()
+        root = QVBoxLayout(body)          # everything but the buttons; scrolls if the screen is small
+        root.setContentsMargins(0, 0, 0, 0)
 
         # ---- header
         head = QHBoxLayout()
@@ -101,14 +105,16 @@ class ClipFinderDialog(QDialog):
 
         # ---- timeline
         self.timeline = Timeline()
-        self.timeline.setMinimumHeight(240)
+        self.timeline.setMinimumHeight(150)
         self.timeline.selected.connect(lambda i: self.select(i, from_timeline=True))
         self.timeline.changed.connect(self._timeline_changed)
         self.timeline.edited.connect(self._schedule_refine)
         self.timeline.created.connect(self._create)
         self.timeline.deleted.connect(self._delete)
         self.timeline.play_requested.connect(self.play_clip)
-        root.addWidget(self.timeline)
+        vsplit = QSplitter(Qt.Vertical)   # drag the divider to give the timeline or the list more room
+        vsplit.setChildrenCollapsible(False)
+        vsplit.addWidget(self.timeline)
 
         # ---- chips (filter by note)
         self.chips_box = QWidget()
@@ -122,12 +128,12 @@ class ClipFinderDialog(QDialog):
         chips_scroll.setFixedHeight(44)
         chips_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         chips_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        root.addWidget(chips_scroll)
 
         # ---- bottom: list | video + selected clip
         split = QSplitter(Qt.Horizontal)
         lbox = QGroupBox("Suggested clips")
         ll = QVBoxLayout(lbox)
+        ll.addWidget(chips_scroll)
         qrow = QHBoxLayout()
         for text, fn in (("Tick all", self.tick_all), ("Best take per note only", self.tick_best),
                          ("Untick all", self.untick_all)):
@@ -151,7 +157,7 @@ class ClipFinderDialog(QDialog):
         rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0)
         self.video = QVideoWidget()
-        self.video.setMinimumSize(360, 220)
+        self.video.setMinimumSize(240, 140)
         self.video.setStyleSheet("background:#000; border-radius:8px;")
         self.player = QMediaPlayer(self)
         self.vaudio = QAudioOutput(self)
@@ -159,7 +165,8 @@ class ClipFinderDialog(QDialog):
         self.player.setVideoOutput(self.video)
         self.player.setSource(QUrl.fromLocalFile(path))
         self.player.positionChanged.connect(self._position)
-        self._stop = QTimer(self)
+        self._play_end: float | None = None   # stop when the video reaches this time (s)
+        self._stop = QTimer(self)               # backstop in case the position never gets there
         self._stop.setSingleShot(True)
         self._stop.timeout.connect(self._stop_playing)
         rl.addWidget(self.video, 1)
@@ -206,7 +213,10 @@ class ClipFinderDialog(QDialog):
         rl.addWidget(pbox)
         split.addWidget(right)
         split.setSizes([620, 600])
-        root.addWidget(split, 1)
+        vsplit.addWidget(split)
+        vsplit.setStretchFactor(0, 2)
+        vsplit.setStretchFactor(1, 3)
+        root.addWidget(vsplit, 1)
         self._panel_widgets = [self.d_start, self.d_end, self.d_drum, self.d_note, self.d_pad, self.play_btn,
                                self.hear_btn, self.del_btn]
 
@@ -214,6 +224,8 @@ class ClipFinderDialog(QDialog):
         bot = QHBoxLayout()
         self.status = QLabel("")
         self.status.setProperty("hint", True)
+        self.status.setWordWrap(True)
+        self.status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)   # long messages never widen the window
         bot.addWidget(self.status, 1)
         self.save_btn = QPushButton("💾  Save changes to this clip")
         self.save_btn.setProperty("primary", True)
@@ -230,7 +242,8 @@ class ClipFinderDialog(QDialog):
         close = QPushButton("Close")
         close.clicked.connect(self.close)
         bot.addWidget(close)
-        root.addLayout(bot)
+        outer.addWidget(scrollable(body), 1)
+        outer.addLayout(bot)              # the buttons always stay visible
 
         self._refine_timer = QTimer(self)
         self._refine_timer.setSingleShot(True)
@@ -627,17 +640,24 @@ class ClipFinderDialog(QDialog):
         if i != self.sel:
             self.select(i)
         self.vaudio.setMuted(False)
+        # seeking happens in the background, so stop by position (not by a timer that may run out before the
+        # sound has even started)
+        self._play_end = c.end
         self.player.setPosition(int(c.start * 1000))
         self.player.play()
-        self._stop.start(int(max(0.05, c.length) * 1000) + 30)
+        self._stop.start(int(max(0.05, c.length) * 1000) + 2500)
 
     def _stop_playing(self) -> None:
+        self._play_end = None
+        self._stop.stop()
         self.player.pause()
         self.timeline.set_playhead(None)
 
     def _position(self, ms: int) -> None:
         if self.player.playbackState() == QMediaPlayer.PlayingState:
             self.timeline.set_playhead(ms / 1000)
+            if self._play_end is not None and ms / 1000 >= self._play_end:
+                self._stop_playing()
 
     def _clip_slot(self, i: int) -> tuple[ClipSlot, float]:
         c = self.items[i]

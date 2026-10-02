@@ -93,6 +93,8 @@ def main() -> int:
     if ico.exists():
         app.setWindowIcon(QIcon(str(ico)))
     theme.apply(app)
+    from vsampler.gui import screen
+    screen.install(app)          # no window or dialog may extend past the edges of the screen
     win = MainWindow()
     win.show()
     return app.exec()
