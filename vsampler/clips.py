@@ -89,6 +89,36 @@ def auto_trim(audio: np.ndarray, sr: int = SR, threshold_db: float = -30.0) -> t
     return start, end
 
 
+TARGET_LOUDNESS_DB = -18.0   # every clip is levelled to this
+MAX_LEVEL_GAIN_DB = 30.0
+
+
+def measure_loudness(audio: np.ndarray, sr: int = SR) -> float | None:
+    """Loudness (dBFS RMS) of the part of the clip where there is actually sound.
+
+    Uses 50 ms windows and ignores those more than 30 dB below the loudest one, so a clip
+    with a short squeal and long silence measures the same as a long steady note.
+    """
+    mono = audio.mean(axis=0) if audio.ndim == 2 else audio
+    win = int(sr * 0.05)
+    n = len(mono) // win
+    if n < 1:
+        return None
+    rms = np.sqrt((mono[: n * win].reshape(n, win).astype(np.float64) ** 2).mean(axis=1))
+    peak = rms.max()
+    if peak <= 1e-6:
+        return None
+    active = rms[rms > peak * 10 ** (-30 / 20)]
+    return float(20 * np.log10(np.sqrt((active ** 2).mean())))
+
+
+def level_gain_db(loudness_db: float | None) -> float:
+    """Gain that brings a clip to the common target loudness."""
+    if loudness_db is None:
+        return 0.0
+    return float(np.clip(TARGET_LOUDNESS_DB - loudness_db, -MAX_LEVEL_GAIN_DB, MAX_LEVEL_GAIN_DB))
+
+
 @dataclass
 class ClipAnalysis:
     duration: float
@@ -97,6 +127,7 @@ class ClipAnalysis:
     trim_start: float
     trim_end: float
     thumbnail: np.ndarray | None  # RGB
+    loudness_db: float | None = None
 
 
 def grab_frame(path: str, t: float, max_side: int = 320) -> np.ndarray | None:
@@ -134,7 +165,7 @@ def analyze_clip(path: str) -> tuple[ClipAnalysis, np.ndarray]:
     mono = np.abs(seg).mean(axis=0)
     loud_t = start + (int(np.argmax(mono)) / SR if len(mono) else 0.0)
     thumb = grab_frame(path, loud_t)
-    return ClipAnalysis(audio.shape[1] / SR, midi, conf, start, end, thumb), audio
+    return ClipAnalysis(audio.shape[1] / SR, midi, conf, start, end, thumb, measure_loudness(seg)), audio
 
 
 class ClipFrames:

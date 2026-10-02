@@ -9,3 +9,8 @@ dist/
 *.mov
 *.mid
 !tests/**/*.mid
+
+# downloaded by setup_tools.py (too big for git)
+tools/audiveris/
+installer/Output/
+release/

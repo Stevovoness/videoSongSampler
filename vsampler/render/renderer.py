@@ -10,6 +10,7 @@ import numpy as np
 import soundfile as sf
 
 from .. import audio_dsp
+from ..clips import level_gain_db, measure_loudness
 from ..models import Project, Song
 from ..planner import Plan, make_plan
 from ..songops import apply_options
@@ -69,7 +70,12 @@ def mix_audio(project: Project, prep: Prepared, progress: ProgressFn = _noop,
             progress(n / max(1, len(insts)), f"Making note {n + 1} of {len(insts)}…")
         src = prep.sources[inst.slot]
         y = audio_dsp.render_note(src.key, src.audio, sr, inst.duration, inst.shift)
-        gain = 10 ** (project.slots[inst.slot].gain_db / 20)
+        slot = project.slots[inst.slot]
+        gain_db = slot.gain_db
+        if project.render.even_volumes:
+            slot.loudness_db = measure_loudness(src.audio)   # of the current trim
+            gain_db += level_gain_db(slot.loudness_db)
+        gain = 10 ** (gain_db / 20)
         if project.render.velocity_volume:
             gain *= 0.35 + 0.65 * inst.velocity
         a = int(inst.start * sr)

@@ -3,6 +3,17 @@ import multiprocessing
 import os
 import sys
 
+# The windowed exe has no console: sys.stdout / sys.stderr are None and any library that prints
+# (music21 warns on import) would crash. Send that output to a log file instead.
+if sys.stdout is None or sys.stderr is None:
+    _log_dir = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "VideoSampler")
+    os.makedirs(_log_dir, exist_ok=True)
+    _log = open(os.path.join(_log_dir, "output.log"), "w", encoding="utf-8", buffering=1)
+    if sys.stdout is None:
+        sys.stdout = _log
+    if sys.stderr is None:
+        sys.stderr = _log
+
 
 def cli_render(project_path: str, out_path: str) -> int:
     """Render a saved project without the GUI:  VideoSampler --render my.vsproj out.mp4

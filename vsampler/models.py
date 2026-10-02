@@ -14,7 +14,8 @@ class ClipSlot:
     trim_end: float | None = None    # seconds; None = end of clip
     detected_midi: float | None = None  # detected pitch (fractional MIDI number)
     autotune: bool = True            # correct the detected pitch to exactly the slot's note
-    gain_db: float = 0.0
+    gain_db: float = 0.0             # user adjustment, on top of automatic levelling
+    loudness_db: float | None = None # measured loudness of the trimmed sound (dBFS)
 
     def autotune_shift(self, slot_midi: int) -> float:
         """Semitones to shift so the clip is exactly in tune (only small corrections)."""
@@ -86,6 +87,7 @@ class RenderSettings:
     only_used_clips: bool = True    # grid shows only clips the song uses
     smooth_slowmo: bool = True      # blend frames when a clip is stretched
     velocity_volume: bool = True    # quieter notes for softer velocities
+    even_volumes: bool = True       # level every clip to the same loudness
     tail: float = 1.0               # seconds of silence at end
     sample_rate: int = 44100
     output_path: str = ""

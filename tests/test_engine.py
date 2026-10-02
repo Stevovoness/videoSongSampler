@@ -157,3 +157,50 @@ def test_render(media, layout):
         assert kinds == ["audio", "video"]
         dur = float(c.duration / 1e6)
         assert abs(dur - 4.5) < 0.2
+
+
+# ---------------------------------------------------------------- volume levelling
+def test_loudness_levelling():
+    from vsampler.clips import TARGET_LOUDNESS_DB, level_gain_db, measure_loudness
+    quiet = tone(440.0, 0.5) * 0.02
+    loud = tone(440.0, 0.5) * 0.9
+    # a short squeal padded with silence measures the same as the squeal alone
+    padded = np.concatenate([np.zeros((2, SR)), loud, np.zeros((2, SR))], axis=1)
+    assert abs(measure_loudness(padded) - measure_loudness(loud)) < 0.5
+    for y in (quiet, loud):
+        levelled = measure_loudness(y) + level_gain_db(measure_loudness(y))
+        assert abs(levelled - TARGET_LOUDNESS_DB) < 0.1
+    assert measure_loudness(np.zeros((2, SR))) is None
+
+
+def test_render_evens_volumes(tmp_path):
+    from vsampler.clips import load_audio
+    quiet = make_clip(tmp_path / "q.mp4", 60)
+    proj = Project()
+    for m, path in ((60, quiet), (64, make_clip(tmp_path / "l.mp4", 64))):
+        a, _ = analyze_clip(path)
+        proj.slots[m] = ClipSlot(path, a.trim_start, a.trim_end, a.detected_midi, loudness_db=a.loudness_db)
+    mid = make_midi(tmp_path / "s.mid", [(60, 0, 0.6), (64, 1.0, 1.6)])
+    song = load_song(mid, proj.song)
+    proj.render.width, proj.render.height = 320, 180
+    proj.render.velocity_volume = False
+
+    def levels(even):
+        proj.render.even_volumes = even
+        out = str(tmp_path / f"o{even}.mp4")
+        render_video(proj, song, out)
+        a = load_audio(out)
+        r = lambda s, e: 20 * np.log10(np.sqrt((a[:, int(s * SR):int(e * SR)] ** 2).mean()))
+        return r(0.05, 0.5), r(1.05, 1.5)
+
+    # simulate the C4 clip having been recorded 20 dB quieter
+    from vsampler.render import sources
+    src = sources.get_source(proj.slots[60])
+    src.audio *= 0.1
+    try:
+        a_off, b_off = levels(False)
+        a_on, b_on = levels(True)
+    finally:
+        sources.forget(quiet)
+    assert abs(a_off - b_off) > 15          # without levelling: very different
+    assert abs(a_on - b_on) < 2             # with levelling: about the same

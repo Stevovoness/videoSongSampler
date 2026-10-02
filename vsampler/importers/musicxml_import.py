@@ -10,6 +10,21 @@ from ..models import Song
 from .midi_import import song_from_pretty_midi
 
 
+def _strip_repeats(score) -> None:
+    """Remove repeat barlines and repeat expressions so the score plays straight through."""
+    from music21 import bar, repeat, spanner, stream
+
+    for m in score.recurse().getElementsByClass(stream.Measure):
+        for side in ("leftBarline", "rightBarline"):
+            if isinstance(getattr(m, side), bar.Repeat):
+                setattr(m, side, None)
+    for el in list(score.recurse().getElementsByClass((repeat.RepeatExpression, repeat.RepeatMark,
+                                                       spanner.RepeatBracket))):
+        site = el.activeSite
+        if site is not None:
+            site.remove(el)
+
+
 def load_musicxml(path: str, kind: str = "musicxml") -> Song:
     from music21 import converter, midi
 
@@ -23,7 +38,11 @@ def load_musicxml(path: str, kind: str = "musicxml") -> Song:
     names = []
     for p in getattr(score, "parts", []):
         names.append(p.partName or p.id or f"Part {len(names) + 1}")
-    mf = midi.translate.music21ObjectToMidiFile(score)
+    try:
+        mf = midi.translate.music21ObjectToMidiFile(score)
+    except Exception:  # noqa: BLE001 - e.g. "badly formed repeats" from OMR'd scores
+        _strip_repeats(score)
+        mf = midi.translate.music21ObjectToMidiFile(score)
     fd, tmp = tempfile.mkstemp(suffix=".mid")
     os.close(fd)
     try:

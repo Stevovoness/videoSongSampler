@@ -48,6 +48,10 @@ def find_audiveris(configured: str | None = None) -> str | None:
     """Locate the Audiveris launcher (used for PDF / image sheet music)."""
     if configured and Path(configured).is_file():
         return configured
+    for bundled in (resource_dir() / "omr" / "Audiveris.exe",                       # inside the built app
+                    resource_dir() / "tools" / "audiveris" / "Audiveris" / "Audiveris.exe"):  # from source
+        if bundled.is_file():
+            return str(bundled)
     names = ["Audiveris.exe", "Audiveris.bat", "audiveris.bat", "audiveris"]
     roots = [os.environ.get("ProgramFiles", r"C:\Program Files"),
              os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),

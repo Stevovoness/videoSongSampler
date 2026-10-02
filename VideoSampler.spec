@@ -1,11 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Build with:  python build_exe.py          (or: pyinstaller VideoSampler.spec)
-# Set VS_ONEFILE=0 for a one-folder build (faster start-up).
+# Build with:  python build_exe.py   (runs setup_tools.py first so Rubber Band + Audiveris are present)
+# One-folder build: Audiveris and its Java runtime are ~160 MB, which a one-file exe would have to
+# unpack on every launch.
 import os
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
-
-ONEFILE = os.environ.get("VS_ONEFILE", "1") == "1"
 
 import basic_pitch  # noqa: E402
 bp_dir = os.path.dirname(basic_pitch.__file__)
@@ -13,6 +12,7 @@ bp_dir = os.path.dirname(basic_pitch.__file__)
 datas = [
     ("assets", "assets"),
     ("tools/rubberband", "tools/rubberband"),
+    ("tools/audiveris/Audiveris", "omr"),   # short path: Audiveris has very long class-file names
     (os.path.join(bp_dir, "saved_models", "icassp_2022", "nmp.onnx"), "basic_pitch/saved_models/icassp_2022"),
 ]
 datas += collect_data_files("librosa")
@@ -62,8 +62,5 @@ common = dict(
     icon="assets/icon.ico",
 )
 
-if ONEFILE:
-    exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], runtime_tmpdir=None, **common)
-else:
-    exe = EXE(pyz, a.scripts, [], exclude_binaries=True, **common)
-    coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="VideoSampler")
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, **common)
+coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="VideoSampler")

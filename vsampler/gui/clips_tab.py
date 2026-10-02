@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog
                                QPushButton, QSlider, QSplitter, QVBoxLayout, QWidget)
 
 from .. import audio_dsp
-from ..clips import SR, analyze_clip
+from ..clips import SR, analyze_clip, level_gain_db, measure_loudness
 from ..models import ClipSlot
 from ..notes import describe_detected, midi_to_name, pretty_name
 from ..render import sources
@@ -94,6 +94,13 @@ class ClipsTab(QWidget):
         fit.clicked.connect(self.fit_to_song)
         rng.addWidget(fit)
         rng.addStretch(1)
+        self.even = QCheckBox("Even out clip volumes automatically")
+        self.even.setToolTip("Measures how loud each clip is and turns quiet ones up / loud ones down "
+                             "so every note comes out at about the same volume")
+        self.even.setChecked(state.project.render.even_volumes)
+        self.even.toggled.connect(self._even_changed)
+        rng.addWidget(self.even)
+        rng.addSpacing(12)
         clear = QPushButton("Remove all clips")
         clear.clicked.connect(self.clear_all)
         rng.addWidget(clear)
@@ -173,6 +180,9 @@ class ClipsTab(QWidget):
         self.d_detect = QLabel("")
         self.d_detect.setWordWrap(True)
         col.addWidget(self.d_detect)
+        self.d_level = QLabel("")
+        self.d_level.setWordWrap(True)
+        col.addWidget(self.d_level)
 
         form = QFormLayout()
         self.trim_a = QDoubleSpinBox()
@@ -262,6 +272,9 @@ class ClipsTab(QWidget):
 
     def _project_replaced(self) -> None:
         self.selected = None
+        self.even.blockSignals(True)
+        self.even.setChecked(self.state.project.render.even_volumes)
+        self.even.blockSignals(False)
         slots = self.state.project.slots
         if slots:
             set_combo_note(self.lo, max(21, min(min(slots) - 2, 48)))
@@ -310,11 +323,13 @@ class ClipsTab(QWidget):
             self.d_title.setText("Pick a key")
             self.d_file.setText("Click a key on the keyboard above to choose the video for that note.")
             self.d_detect.setText("")
+            self.d_level.setText("")
             return
         self.d_title.setText(pretty_name(m))
         if slot is None:
             self.d_file.setText("No clip for this note yet. Click “Choose video…” or drop a video on the key.")
             self.d_detect.setText("")
+            self.d_level.setText("")
             self.choose_btn.setText("Choose video…")
             return
         self.choose_btn.setText("Replace video…")
@@ -331,6 +346,7 @@ class ClipsTab(QWidget):
             elif slot.autotune and abs(diff) > 0.005:
                 txt += f" → tuned {'up' if diff > 0 else 'down'} {abs(diff) * 100:.0f}¢"
             self.d_detect.setText(txt)
+        self.d_level.setText(self._level_text(slot))
         for w, v in ((self.trim_a, slot.trim_start), (self.trim_b, slot.trim_end or 0.0)):
             w.blockSignals(True)
             w.setValue(v)
@@ -344,6 +360,27 @@ class ClipsTab(QWidget):
         self.gain_lab.setText(f"{slot.gain_db:+.0f} dB")
         set_combo_note(self.move_to, m)
 
+    def _level_text(self, slot: ClipSlot) -> str:
+        if slot.loudness_db is None:
+            return ""
+        txt = f"Loudness: <b>{slot.loudness_db:.0f} dB</b>"
+        if self.state.project.render.even_volumes:
+            g = level_gain_db(slot.loudness_db)
+            if abs(g) >= 0.5:
+                txt += f" → evened out {'louder' if g > 0 else 'quieter'} by {abs(g):.0f} dB"
+            else:
+                txt += " → already at the standard level"
+        return txt
+
+    def _even_changed(self, on: bool) -> None:
+        self.state.project.render.even_volumes = on
+        self.state.touch_slots()
+
+    def _update_loudness(self, s: ClipSlot) -> None:
+        audio = sources.get_audio(s.path)
+        end = s.trim_end if s.trim_end is not None else audio.shape[1] / SR
+        s.loudness_db = measure_loudness(audio[:, int(s.trim_start * SR): int(end * SR)])
+
     # ------------------------------------------------------------------ editing
     def _slot(self) -> ClipSlot | None:
         return self.state.project.slots.get(self.selected) if self.selected is not None else None
@@ -355,6 +392,8 @@ class ClipsTab(QWidget):
             if b <= a + 0.02:
                 return
             s.trim_start, s.trim_end = a, b
+            self._update_loudness(s)
+            self.d_level.setText(self._level_text(s))
             self.state.dirty = True
 
     def auto_trim_selected(self) -> None:
@@ -364,6 +403,7 @@ class ClipsTab(QWidget):
         from ..clips import auto_trim
         a, b = auto_trim(sources.get_audio(s.path))
         s.trim_start, s.trim_end = a, b
+        self._update_loudness(s)
         self.state.touch_slots()
 
     def _autotune_changed(self, on: bool) -> None:
@@ -429,6 +469,11 @@ class ClipsTab(QWidget):
         try:
             src = sources.get_source(s)
             y = audio_dsp.render_note(src.key, src.audio, SR, src.length, s.autotune_shift(m))
+            g = s.gain_db + (level_gain_db(measure_loudness(src.audio)) if self.state.project.render.even_volumes else 0)
+            y = y * (10 ** (g / 20))
+            peak = float(abs(y).max()) if y.size else 0
+            if peak > 0.99:
+                y = y * (0.99 / peak)
             sf.write(self._tmp_wav, y.T, SR)
             self.audio.play(self._tmp_wav)
         except Exception as e:  # noqa: BLE001
@@ -478,7 +523,8 @@ class ClipsTab(QWidget):
                                 self.refresh()
                                 return
             sources.forget_frames(path)
-            self.state.project.slots[target] = ClipSlot(path, a.trim_start, a.trim_end, a.detected_midi)
+            self.state.project.slots[target] = ClipSlot(path, a.trim_start, a.trim_end, a.detected_midi,
+                                                        loudness_db=a.loudness_db)
             pm = to_pixmap(a.thumbnail)
             if pm:
                 self.state.thumbs[path] = pm
