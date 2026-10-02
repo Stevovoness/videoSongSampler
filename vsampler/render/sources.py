@@ -35,14 +35,42 @@ def source_key(slot: ClipSlot) -> str:
     return f"{slot.path}|{slot.trim_start:.4f}|{slot.trim_end}"
 
 
+@dataclass
+class AudioSource:
+    """Just the sound of a clip: enough for audio previews, without decoding any video frames."""
+    key: str
+    audio: np.ndarray
+    trim_start: float
+    length: float
+
+
+_path_locks: dict[str, threading.Lock] = {}
+
+
 def get_audio(path: str) -> np.ndarray:
     with _lock:
         a = _audio_cache.get(path)
-    if a is None:
-        a = load_audio(path)
+        plock = _path_locks.setdefault(path, threading.Lock())
+    if a is not None:
+        return a
+    with plock:   # clips cut from one long video load in parallel: decode its sound only once
         with _lock:
-            _audio_cache[path] = a
+            a = _audio_cache.get(path)
+        if a is None:
+            a = load_audio(path)
+            with _lock:
+                _audio_cache[path] = a
     return a
+
+
+def get_audio_source(slot: ClipSlot) -> AudioSource:
+    with _lock:
+        src = _sources.get(source_key(slot))
+    if src is not None:
+        return AudioSource(src.key, src.audio, src.trim_start, src.length)
+    seg, t0, _t1 = _trimmed(slot)
+    seg = np.ascontiguousarray(seg)
+    return AudioSource(source_key(slot), seg, t0, seg.shape[1] / SR)
 
 
 def store_audio(path: str, audio: np.ndarray) -> None:

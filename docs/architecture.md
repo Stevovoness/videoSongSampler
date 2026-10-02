@@ -40,6 +40,11 @@ The GUI (`vsampler/gui/`) edits a single `Project` held by `AppState`. It listen
   (`renderer.prepare` sets it), so a drum hit is never stretched or cut short. Transpose and melody-only ignore drums.
 - **Default tracks:** with `SongOptions.enabled_tracks = None`, all pitched tracks play, and drum tracks play only
   if the project has drum clips (`songops.default_tracks`).
+- **Speed:** `renderer.prepare` loads clips in parallel (a thread pool; PyAV decoding and Rubber Band
+  subprocesses run outside the GIL), and `mix_audio` renders each distinct (clip, shift, length) note once, also in
+  parallel. `render_audio_preview` uses `prepare(audio_only=True, max_seconds=…)`: sound only
+  (`sources.get_audio_source`, no video frames), limited to the start of the song. `sources.get_audio` holds a
+  per-file lock, so clips from one long video decode its sound once.
 - **Stretching:** when a note is longer than its clip, `audio_dsp.render_note` time-stretches it (Rubber Band,
   attack kept intact). `audio_dsp.time_map` keeps the video in sync.
 - **Sample pad** (`gui/widgets/sampler.py`): renders each clip once with `renderer.render_clip_audio` (same gain

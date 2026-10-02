@@ -56,6 +56,11 @@ so a short squeal followed by silence measures correctly). When rendering, every
 level. You can turn this off with **Even out clip volumes automatically** in Step 1, and the per-clip volume
 slider still works on top of it.
 
+### Quick previews
+In Step 2, **▶ Listen with my clips** plays the song with your clips. By default it plays just the first 15
+seconds, which is ready in a few seconds. Choose a longer preview or the whole song next to the button.
+Replaying a preview you haven't changed is instant.
+
 ### Long notes keep their pitch
 When a note lasts longer than its clip, the clip is **time-stretched without changing pitch**, using
 [Rubber Band](https://breakfastquay.com/rubberband/) with formant preservation. The first ~70 ms (the attack) plays

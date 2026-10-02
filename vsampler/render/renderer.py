@@ -1,7 +1,9 @@
 """End-to-end rendering: plan -> audio mix -> composited video -> mp4."""
 from __future__ import annotations
 
+import os
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Callable
 
@@ -16,7 +18,7 @@ from ..models import ClipSlot, Project, Song
 from ..planner import Plan, plan_for_project
 from ..songops import apply_options
 from .compositor import Compositor
-from .sources import ClipSource, get_source, source_key, trimmed_audio
+from .sources import AudioSource, ClipSource, get_audio_source, get_source, source_key, trimmed_audio
 
 ProgressFn = Callable[[float, str], None]
 
@@ -28,7 +30,7 @@ class Cancelled(Exception):
 @dataclass
 class Prepared:
     plan: Plan
-    sources: dict[tuple[int, int], ClipSource]   # (slot key, take) -> clip
+    sources: dict[tuple[int, int], ClipSource | AudioSource]   # (slot key, take) -> clip
     duration: float
 
     @property
@@ -38,6 +40,11 @@ class Prepared:
 
 def _noop(_f: float, _m: str) -> None:
     pass
+
+
+def _workers() -> int:
+    """Parallel jobs: Rubber Band runs as separate processes and video decoding releases the GIL."""
+    return max(2, min(8, (os.cpu_count() or 4)))
 
 
 def _check(cancel: threading.Event | None) -> None:
@@ -89,20 +96,36 @@ def render_slot_audio(project: Project, key: int, shift: float = 0.0, take: int 
 
 
 def prepare(project: Project, song: Song, progress: ProgressFn = _noop,
-            cancel: threading.Event | None = None, all_slots: bool = False) -> Prepared:
+            cancel: threading.Event | None = None, all_slots: bool = False, audio_only: bool = False,
+            max_seconds: float | None = None) -> Prepared:
+    """Plan the song and load the clips it uses.
+
+    audio_only: load just the sound of each clip (audio previews), not its video frames.
+    max_seconds: only the notes that start in the first max_seconds of the song (quick previews).
+    """
     events = apply_options(song, project.song, include_drums=bool(project.drum_slots))
     plan = plan_for_project(events, project)
     if not plan.instances:
         raise ValueError("None of the song's notes have a clip. Add clips for the notes shown in red, "
                          "or turn on 'Octave jump' / 'Use nearest clip and pitch-shift'.")
+    if max_seconds is not None:
+        first = min(i.start for i in plan.instances)
+        plan.instances = [i for i in plan.instances if i.start < first + max_seconds]
     used = sorted({(i.slot, i.take) for i in plan.instances})
-    if all_slots or not project.render.only_used_clips:
+    if (all_slots or not project.render.only_used_clips) and not audio_only:
         used = [(k, t) for k in all_slot_keys(project) for t in range(project_slot(project, k).take_count)]
-    sources: dict[tuple[int, int], ClipSource] = {}
-    for n, (key, take) in enumerate(used):
-        _check(cancel)
-        progress(n / max(1, len(used)), f"Loading clip {n + 1} of {len(used)}…")
-        sources[(key, take)] = get_source(project_take(project, key, take))
+    load = get_audio_source if audio_only else get_source
+    sources: dict = {}
+    with ThreadPoolExecutor(max_workers=_workers()) as ex:
+        futs = {ex.submit(load, project_take(project, key, take)): (key, take) for key, take in used}
+        try:
+            for n, fut in enumerate(as_completed(futs)):
+                _check(cancel)
+                progress(n / max(1, len(used)), f"Loading clip {n + 1} of {len(used)}…")
+                sources[futs[fut]] = fut.result()
+        except BaseException:
+            ex.shutdown(wait=False, cancel_futures=True)
+            raise
     for inst in plan.instances:
         if inst.drum:   # a drum hit always plays its whole clip, as recorded (never cut short or stretched)
             inst.duration = sources[(inst.slot, inst.take)].length
@@ -115,12 +138,31 @@ def mix_audio(project: Project, prep: Prepared, progress: ProgressFn = _noop,
     sr = project.render.sample_rate
     out = np.zeros((2, int(prep.duration * sr) + sr), np.float32)
     insts = prep.plan.instances
-    for n, inst in enumerate(insts):
-        _check(cancel)
-        if n % 8 == 0:
-            progress(n / max(1, len(insts)), f"Making note {n + 1} of {len(insts)}…")
+    # stretch / tune every distinct note once, several at a time
+    def note_key(inst):
+        return prep.sources[(inst.slot, inst.take)].key, round(inst.shift, 3), max(1, int(round(inst.duration * sr)))
+
+    jobs = {}
+    for inst in insts:
+        jobs.setdefault(note_key(inst), inst)
+    notes: dict = {}
+    with ThreadPoolExecutor(max_workers=_workers()) as ex:
+        futs = {}
+        for k, inst in jobs.items():
+            src = prep.sources[(inst.slot, inst.take)]
+            futs[ex.submit(audio_dsp.render_note, src.key, src.audio, sr, inst.duration, inst.shift)] = k
+        try:
+            for n, fut in enumerate(as_completed(futs)):
+                _check(cancel)
+                if n % 4 == 0:
+                    progress(n / max(1, len(futs)), f"Making note {n + 1} of {len(futs)}…")
+                notes[futs[fut]] = fut.result()
+        except BaseException:
+            ex.shutdown(wait=False, cancel_futures=True)
+            raise
+    for inst in insts:
         src = prep.sources[(inst.slot, inst.take)]
-        y = audio_dsp.render_note(src.key, src.audio, sr, inst.duration, inst.shift)
+        y = notes[note_key(inst)]
         gain = 10 ** (slot_gain_db(project, project_take(project, inst.slot, inst.take), src.audio) / 20)
         if project.render.velocity_volume:
             gain *= 0.35 + 0.65 * inst.velocity
@@ -134,10 +176,22 @@ def mix_audio(project: Project, prep: Prepared, progress: ProgressFn = _noop,
     return out
 
 
+PREVIEW_FADE = 0.4
+
+
 def render_audio_preview(project: Project, song: Song, wav_path: str, progress: ProgressFn = _noop,
-                         cancel: threading.Event | None = None) -> str:
-    prep = prepare(project, song, lambda f, m: progress(f * 0.3, m), cancel)
-    audio = mix_audio(project, prep, lambda f, m: progress(0.3 + f * 0.7, m), cancel)
+                         cancel: threading.Event | None = None, max_seconds: float | None = None) -> str:
+    """The song's sound with the user's clips (no video), or just its first max_seconds."""
+    prep = prepare(project, song, lambda f, m: progress(f * 0.1, m), cancel, audio_only=True,
+                   max_seconds=max_seconds)
+    if max_seconds is not None:
+        first = min(i.start for i in prep.plan.instances)
+        prep.duration = min(prep.duration, first + max_seconds + PREVIEW_FADE)
+    audio = mix_audio(project, prep, lambda f, m: progress(0.1 + f * 0.9, m), cancel)
+    if max_seconds is not None:   # fade out where the preview stops
+        n = min(audio.shape[1], int(PREVIEW_FADE * project.render.sample_rate))
+        if n:
+            audio[:, -n:] *= np.linspace(1, 0, n, dtype=np.float32)
     sf.write(wav_path, audio.T, project.render.sample_rate)
     return wav_path
 

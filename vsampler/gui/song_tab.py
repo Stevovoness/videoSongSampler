@@ -5,8 +5,8 @@ import os
 import tempfile
 import webbrowser
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QCheckBox, QDoubleSpinBox, QFileDialog, QFrame, QGroupBox, QHBoxLayout, QLabel,
+from PySide6.QtCore import QSettings, Qt
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QGroupBox, QHBoxLayout, QLabel,
                                QListWidget, QListWidgetItem, QMessageBox, QProgressBar, QPushButton, QSlider,
                                QSpinBox, QVBoxLayout, QWidget)
 
@@ -22,6 +22,9 @@ from .state import AppState
 from .widgets.piano_roll import PianoRoll
 from .widgets.player import AudioPlayer
 from .worker import run_task
+
+LISTEN = "▶  Listen with my clips"
+PREVIEW_LENGTHS = [("First 15 seconds", 15), ("First 30 seconds", 30), ("First minute", 60), ("Whole song", None)]
 
 KIND_LABEL = {"midi": "MIDI file", "musicxml": "MusicXML sheet music", "audio": "Audio recording (auto-transcribed)",
               "sheet": "PDF / image sheet music (read with Audiveris)"}
@@ -188,9 +191,19 @@ class SongTab(QWidget):
         self.roll = PianoRoll()
         rl.addWidget(self.roll, 1)
         prow = QHBoxLayout()
-        self.preview_btn = QPushButton("▶  Listen to the song with my clips")
+        self.preview_btn = QPushButton(LISTEN)
         self.preview_btn.clicked.connect(self.toggle_preview)
         prow.addWidget(self.preview_btn)
+        self.prev_len = QComboBox()
+        for label, secs in PREVIEW_LENGTHS:
+            self.prev_len.addItem(label, secs)
+        self.prev_len.setToolTip("A short preview is ready much sooner. The finished video always has the whole song.")
+        saved = QSettings("VideoSampler", "VideoSampler").value("preview_seconds", 15)
+        i = self.prev_len.findData(None if saved in (None, "", "all") else int(saved))
+        self.prev_len.setCurrentIndex(max(0, i))
+        self.prev_len.currentIndexChanged.connect(self._prev_len_changed)
+        prow.addWidget(self.prev_len)
+        self._last_preview: tuple | None = None   # what the preview WAV was made from (replays instantly)
         self.prev_status = hint("")
         prow.addWidget(self.prev_status, 1)
         zi, zo = QPushButton("Zoom +"), QPushButton("Zoom −")
@@ -481,6 +494,14 @@ class SongTab(QWidget):
         if self.task:
             self.task.cancel.set()
             return
+        secs = self.prev_len.currentData()
+        import copy
+        project = copy.deepcopy(self.state.project)
+        made_from = (project.to_json(), id(self.state.song), secs)
+        if made_from == self._last_preview and os.path.exists(self._wav):
+            self.preview_btn.setText("■  Stop")
+            self.player.play(self._wav)          # nothing changed since last time: no need to rebuild it
+            return
         self.preview_btn.setText("■  Stop (preparing…)")
 
         def prog(f, m):
@@ -488,21 +509,25 @@ class SongTab(QWidget):
 
         def done(path):
             self.task = None
+            self._last_preview = made_from
             self.prev_status.setText("")
             self.preview_btn.setText("■  Stop")
             self.player.play(path)
 
         def fail(e, tb):
             self.task = None
-            self.preview_btn.setText("▶  Listen to the song with my clips")
+            self.preview_btn.setText(LISTEN)
             self.prev_status.setText("")
             if not isinstance(e, Cancelled):
                 QMessageBox.warning(self, "Preview failed", str(e))
 
-        import copy
-        self.task = run_task(render_audio_preview, copy.deepcopy(self.state.project), self.state.song, self._wav,
+        self.task = run_task(render_audio_preview, project, self.state.song, self._wav, max_seconds=secs,
                              on_done=done, on_error=fail, on_progress=prog)
 
+    def _prev_len_changed(self) -> None:
+        secs = self.prev_len.currentData()
+        QSettings("VideoSampler", "VideoSampler").setValue("preview_seconds", "all" if secs is None else secs)
+
     def _preview_stopped(self) -> None:
-        self.preview_btn.setText("▶  Listen to the song with my clips")
+        self.preview_btn.setText(LISTEN)
         self.roll.set_playhead(None)

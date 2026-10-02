@@ -6,6 +6,12 @@ Every change gets a line here (see the workflow in [CLAUDE.md](../CLAUDE.md)). N
 ## Unreleased
 
 ## 1.3.1
+- **Much faster previews.** "Listen with my clips" in Step 2 plays just the first 15 seconds by default (choose
+  15 s / 30 s / 1 minute / whole song next to the button, and the choice is remembered). It loads only the clips'
+  sound, never their video, and replays instantly if nothing has changed. A 60-second test song went from about
+  45 s to about 6 s.
+- **Faster video rendering.** Clips load in parallel, and notes are stretched and tuned in parallel on all CPU
+  cores. Parallel jobs decode a long video's sound only once.
 - **Windows always fit the screen.** An app-wide guard (`gui/screen.py`) shrinks and moves every window, dialog and
   message box so it stays inside the visible screen area. Big windows start at a size relative to the screen,
   and each step and the clip finder scroll instead of growing past the edge. The clip finder's buttons sit in a

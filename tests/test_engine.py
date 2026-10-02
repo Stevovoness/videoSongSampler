@@ -421,3 +421,24 @@ def test_render_from_one_long_video(long_video, tmp_path):
     a = load_audio(out)
     pitch, _ = detect_pitch(a[:, int(0.6 * SR): int(0.95 * SR)])
     assert abs(pitch - 64) < 0.3
+
+
+# ---------------------------------------------------------------- quick previews
+def test_audio_preview_is_limited_and_skips_video(media, tmp_path, monkeypatch):
+    from vsampler.render import renderer, sources
+    _d, clips, _ = media
+    proj = Project()
+    for m, path in clips.items():
+        a, _ = analyze_clip(path)
+        proj.slots[m] = ClipSlot(path, a.trim_start, a.trim_end, a.detected_midi)
+    proj.song.allow_pitch_shift = True
+    mid = make_midi(tmp_path / "long.mid", [(60 + (i % 3) * 4, i * 0.5, i * 0.5 + 0.4) for i in range(40)])  # 20 s
+    song = load_song(mid, proj.song)
+    monkeypatch.setattr(sources, "ClipFrames", lambda *a, **k: pytest.fail("audio preview decoded video frames"))
+    sources._sources.clear()
+    out = renderer.render_audio_preview(proj, song, str(tmp_path / "p.wav"), max_seconds=5)
+    a = load_audio(out)
+    assert 5.0 <= a.shape[1] / SR <= 5.8                       # just the start, with a short fade-out
+    assert np.abs(a[:, -100:]).max() < 0.02
+    whole = load_audio(renderer.render_audio_preview(proj, song, str(tmp_path / "w.wav")))
+    assert whole.shape[1] / SR > 19
