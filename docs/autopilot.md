@@ -139,6 +139,78 @@ video, and a negative `start` counts back from the end:
 | `run_daily.py` | Runs the steps in order, logs, retries and alerts. `--dry-run` does everything except publish. `--date` pretends it's another day (to test themes). |
 | `orders/` | The custom-video service (§5). |
 
+### How the text is written (planned)
+The text is written by an LLM: Claude (`claude-sonnet-5-5`) through the API, which also looks at images. A
+generic model writes generic captions, so its quality comes from the **context** it gets. `context.py` builds a
+"what's on screen" timeline for *this exact render*:
+
+| Context | Where it comes from |
+|---|---|
+| Who and what the footage is: title, date, channel, description | `footage.py` (search result metadata) |
+| What was being said: a timestamped transcript of every source piece | `faster-whisper`, run once per piece and cached like the clip analysis |
+| Which words each sung note came from, and the sentence around it (±10 s) | `AutoReport.clips` (source file and times) matched against the transcript |
+| What the viewer sees at each moment: 1 frame per song phrase (~every 2 s) | `renderer.preview_frame` on the finished project, sent as images |
+| What the song is doing: the song, its section, where the chorus or high note lands | `songs.yaml` plus the note plan (e.g. "highest note at 12.4 s") |
+| Why this person is in the news today | `trends.py` headlines |
+| Today's theme | `seasons.py` |
+| The voice: the style guide and examples below | `writer.py` prompt |
+| What worked before: the best-performing hooks | `db` stats |
+
+Claude returns strict JSON (a tool call with a schema): the hook, 2–4 captions with start and end times
+snapped to phrase boundaries, the call to action, and per-platform titles, descriptions and hashtags. The code
+checks it: times inside the video, hook ≤ 10 words, caption ≤ 8 words, no banned words. A second call, the
+**judge**, checks it against the rules in §7 with the same frames. A failed check means one retry, then the next
+candidate. Cost is a few cents per video.
+
+### Finding songs and footage (planned)
+**The ideas list** (`projects/Project combination ideas.txt`): `ideas.py` turns each line into
+`ideas.yaml` entries `{person or group, song, category, footage tier}` (one Claude call, which you review once). On a
+normal day, `trends.py` picks the idea that best fits today's news or theme. On a quiet day, the next good idea
+from the backlog plays. Each idea is used once, then rested.
+
+**Songs** (`songs.py`), tried in this order:
+1. **Your library:** `songs/` files you've added (`.mid` / `.mxl`). MuseScore arrangements like yours are the
+   best quality. MuseScore has no API and its terms forbid scraping, so these stay a manual download. That's two
+   minutes per song for the curated list.
+2. **Lakh MIDI dataset:** about 176,000 MIDI files, 45,000 of them matched to artist and title. Downloaded once
+   (a few GB) and indexed, it gives an instant lookup for most hits up to about 2011 (Barbie Girl, Baby,
+   Fireflies…). Its licence covers research, which makes it fine for finding the notes. The song's copyright is
+   the same issue whichever MIDI file is used (§7).
+3. **Transcribe the recording:** the official audio is split into vocals, bass and the rest (Demucs), and the
+   app's existing `basic-pitch` transcribes each part into MIDI. It works for brand-new songs no MIDI exists for.
+   Quality varies, so these always go through approval.
+
+**The chorus** is found automatically: the most repeated 15–25 s stretch of the tune (self-similarity of the note
+sequence), or lyric lines in MusicXML files that have them. It's stored as `start`/`end` in `songs.yaml`.
+
+**Footage** (`footage.py` with `people.yaml`): one entry per person or group, with these fields:
+- Names and aliases.
+- Their official sources, e.g.:
+  - White House and House/Senate floor video for US politicians.
+  - kremlin.ru for Putin (its videos are CC BY 4.0).
+  - The Obama White House archive and the Reagan Library.
+- The footage tier.
+- A reference face: their official portrait from Wikimedia Commons.
+
+Then, for each entry:
+1. **Search:** the YouTube Data API (`search.list` restricted to those channels, long videos, newest first), or
+   the source's own archive.
+2. **Download:** long speeches (10–60 min) at 360–720p.
+3. **Cut and analyse:** as `auto` does now; cached, so footage is only ever analysed once.
+4. **Keep only the right person:** face matching against the reference portrait, plus speaker diarisation
+   (`pyannote`), so only clips where *that* person is on screen *and* talking are used. This is the same
+   feature as "Choose who sings" in TODO.md.
+5. **Check:** if coverage is too low, fetch more footage and repeat.
+
+**Rights per idea:**
+- **Government footage** (US politicians, Congress) is Tier 1.
+- **Putin** via kremlin.ru is Tier 1 with credit in the description.
+- **Celebrities, the Royal Family, films and cartoons** (The Avengers, The Simpsons, Teletubbies…) are Tier 2:
+  their footage is owned by studios and broadcasters, who use Content ID heavily.
+- **People with little or no recorded speech** (Einstein, Newton) won't work.
+- **Using a celebrity's face to advertise the paid service** risks a right-of-publicity claim, separate from
+  copyright. On celebrity videos, the call to action stays soft ("link in bio"), not "I'll make you one".
+
 ## 4. Configuration (planned)
 `config.yaml`:
 ```yaml

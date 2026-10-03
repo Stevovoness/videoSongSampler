@@ -4,6 +4,8 @@ Every change gets a line here (see the workflow in [CLAUDE.md](../CLAUDE.md)). N
 **Unreleased** until a version is released.
 
 ## Unreleased
+- `docs/autopilot.md`: how the text is written (Claude with a per-render context timeline) and how songs and
+  footage will be found automatically (ideas queue, song finder, people and sources, face and speaker matching).
 - **The clip finder is several times faster in the app too.** It uses every CPU core, a coarser pitch search
   (each found note's pitch is then measured precisely, so tuning is as accurate as before) and one set of worker
   processes for the whole session. A new **"This video is: singing or playing / talking (faster)"** choice in the

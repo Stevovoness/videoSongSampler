@@ -30,6 +30,15 @@ up (see the workflow in [CLAUDE.md](../CLAUDE.md)). Items marked *(you)* need th
 - [x] `auto` plays every part of the song (chords and bass), not just the tune
 - [x] Writer voice guide in `docs/autopilot.md` (casual, "one of you", gently mocks hyper-patriotism)
 - [ ] Long videos (over 30 minutes) in the app's clip finder: cut them into pieces like `auto` does
+- [ ] **Everything `auto` does, in the app** (projects made by `auto` already keep their text and outro when
+      opened, saved and rendered in the app, but these can't be seen or changed there yet):
+  - [ ] Text editor in Step 3: add, edit and time the hook, captions, call to action and watermark, with a live
+        preview frame
+  - [ ] Outro video picker in Step 3
+  - [ ] "Shorts / Reels / TikTok" preset in Step 3 (size, length cap, loudness, no labels in one click)
+  - [ ] "Build it for me" in Step 1: pick long videos and the app chooses every clip and take (`auto_project`),
+        with the coverage report
+  - [ ] "Only the tune / every part" switch next to the song's tracks
 - [ ] **Choose a section of the song in the app** (Step 2): set a start and end (e.g. drag on the piano roll, or
       "chorus only"), so previews and the final render only make that part instead of the whole 4-minute song.
       The engine already supports it (`SongOptions.start_s` / `end_s`, `--start` / `--end` on the command line).
@@ -43,6 +52,11 @@ up (see the workflow in [CLAUDE.md](../CLAUDE.md)). Items marked *(you)* need th
 - [ ] Logs per run (`runs/<date>/`), Telegram alerts, nightly S3 backup
 
 ## 3. `autopilot/` package
+- [ ] `ideas.py` + `ideas.yaml`: turn `Project combination ideas.txt` into a queue of {person, song, tier}
+- [ ] `people.yaml`: per person/group the official sources, aliases, footage tier and a reference portrait
+- [ ] Song finder: your library, then the Lakh MIDI dataset index, then transcription (Demucs + basic-pitch)
+- [ ] Automatic chorus finding (most repeated stretch of the tune, or lyric lines)
+- [ ] Transcripts of source footage (faster-whisper), cached like the clip analysis
 - [ ] `config.yaml` and its loader (`publish_mode: auto | approval`, platforms, post times, source tiers…)
 - [ ] `seasons.yaml` + `seasons.py`: family and political theme calendar, lead times, weights, CTAs
 - [ ] `db.py`: SQLite for people, songs, footage, posts, stats and claims
