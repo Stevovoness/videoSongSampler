@@ -4,6 +4,21 @@ Every change gets a line here (see the workflow in [CLAUDE.md](../CLAUDE.md)). N
 **Unreleased** until a version is released.
 
 ## Unreleased
+- **Long speeches work with `auto`.** Videos of any length are cut into ~10-minute pieces first (`media.split_video`,
+  no re-encoding, takes seconds), so a 2-hour video no longer needs gigabytes of memory.
+- **Speech is analysed ~25× faster.** `auto` listens over the speaking-voice range (60–600 Hz) with a coarser pitch
+  grid, on several CPU cores (`clipfinder.analyse(pitch_range=, resolution=, workers=)`); about 8× faster than real
+  time on 8 cores. `--full-range` keeps the old behaviour for singing and instruments.
+- Each piece's analysis is saved next to it, so trying another song with the same footage is instant.
+- `auto` plays just the song's tune: with a piano arrangement it picks the highest-sounding track, so the left
+  hand's bass line doesn't creep in (`auto.melody_track`).
+- `auto` options `--full-range`, `--workers`, `--work-dir`.
+- When several key changes play the song equally well, `auto` picks the one that puts the tune in the middle of the
+  clips, where the voice has the most takes (`auto.clip_centre`); it now tries -24..24 semitones.
+- Tested on real footage: 3 h 20 min of White House video (a 43-minute announcement and the Marine Corps 250th)
+  analysed in 32 minutes and gave 710 pitched syllables from D2 to C#5. The "Never Gonna Give You Up" chorus and
+  Yankee Doodle were both covered 100% by exact notes, and the rendered Shorts were in tune (every checked note
+  within half a semitone).
 - `docs/TODO.md`: a to-do list for the app and the automation, ticked off as work is done. `CLAUDE.md` and
   `AGENTS.md` now require updating the docs and ticking off the list after every change.
 

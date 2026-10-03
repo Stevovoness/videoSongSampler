@@ -99,7 +99,8 @@ def cmd_auto(a: argparse.Namespace) -> int:
         render.overlays = _load_overlays(a.overlays)
         render.outro = a.outro or ""
         song_opts = SongOptions(start_s=a.start or 0.0, end_s=a.end)
-        opts = AutoOptions(max_fragment=a.max_fragment, transpose=a.transpose, drums=not a.no_drums)
+        opts = AutoOptions(max_fragment=a.max_fragment, transpose=a.transpose, drums=not a.no_drums,
+                           voice=not a.full_range, workers=a.workers, work_dir=a.work_dir or "")
         project, song, report = auto_project(a.videos, a.song, opts, song_opts, render, log.progress())
         project.render.output_path = str(out)
         project.save(out.with_suffix(".vsproj"))
@@ -170,6 +171,10 @@ def parser() -> argparse.ArgumentParser:
     au.add_argument("--min-coverage", type=float, default=0.0,
                     help="don't render if the clips play less than this share of the song (0..1)")
     au.add_argument("--no-drums", action="store_true", help="don't put percussive sounds on drum pads")
+    au.add_argument("--full-range", action="store_true",
+                    help="listen for singing / instruments too (slower); the default suits speech")
+    au.add_argument("--workers", type=int, default=0, help="processes for pitch tracking (default: CPU cores - 1)")
+    au.add_argument("--work-dir", help="where long videos' pieces and saved analyses go (default: the app cache)")
     au.add_argument("--no-render", action="store_true", help="only build the project and the report")
     au.set_defaults(func=cmd_auto)
 

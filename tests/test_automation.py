@@ -163,3 +163,59 @@ def test_cli_old_render_form_and_errors(tmp_path):
     assert cli.main(["--render", str(tmp_path / "missing.vsproj"), str(out)]) == cli.EXIT_FAILED
     assert "FAILED" in (tmp_path / "x.mp4.log").read_text(encoding="utf-8")
     assert cli.main(["auto", "--song", "x.mid"]) == 2      # --videos and --out are required
+
+
+# ---------------------------------------------------------------- long videos and speech
+def test_split_video_into_pieces(tmp_path):
+    from vsampler.media import duration, split_video
+    long = make_long_clip(tmp_path / "long.mp4", [(60, 1.0, 0.5), (64, 7.0, 0.5)], total=12.0)
+    pieces = split_video(long, tmp_path / "pieces", piece_seconds=4)
+    assert len(pieces) >= 2
+    assert sum(duration(p) for p in pieces) == pytest.approx(12.0, abs=0.5)
+    assert all(load_audio(p).shape[1] > 0 for p in pieces)
+    assert split_video(long, tmp_path / "pieces", piece_seconds=4) == pieces     # reused, not cut again
+    assert split_video(long, tmp_path / "pieces", piece_seconds=60) == [long]    # short enough already
+
+
+def test_parallel_voice_analysis_matches(speech):
+    _d, path, _found = speech
+    audio = load_audio(path)
+    one = clipfinder.analyse(audio, SR, pitch_range=clipfinder.VOICE_RANGE)
+    many = clipfinder.analyse(np.concatenate([audio] * 5, axis=1), SR, pitch_range=clipfinder.VOICE_RANGE,
+                              workers=3, resolution=clipfinder.VOICE_RESOLUTION)   # 44 s: several chunks
+    notes = sorted(round(c.midi) for c in one.candidates if c.kind == "note")
+    assert notes == sorted(n for n, _s, _d in NOTES)
+    assert sorted(round(c.midi) for c in many.candidates if c.kind == "note") == sorted(notes * 5)
+
+
+def test_find_clips_saves_its_analysis(speech, tmp_path, monkeypatch):
+    from vsampler import auto
+    _d, path, _found = speech
+    copy = tmp_path / "speech.mp4"
+    copy.write_bytes(Path(path).read_bytes())
+    opts = AutoOptions(work_dir=str(tmp_path / "work"), workers=1)
+    first = auto.find_clips([str(copy)], opts=opts)
+    monkeypatch.setattr(clipfinder, "analyse", lambda *a, **k: pytest.fail("analysed again"))
+    again = auto.find_clips([str(copy)], opts=opts)
+    assert [(p, c.start, c.midi) for p, c in again] == [(p, c.start, c.midi) for p, c in first]
+
+
+def test_melody_track_is_the_tune():
+    from vsampler.auto import melody_track
+    events = [NoteEvent(i * 0.5, i * 0.5 + 0.4, 72 + i % 5, track=0) for i in range(12)]
+    events += [NoteEvent(i * 0.5, i * 0.5 + 0.4, 40 + i % 3, track=1) for i in range(12)]
+    song = Song("x.mid", "midi", events, [Track(0, "Right hand", 12, 72, 76), Track(1, "Left hand", 12, 40, 42)])
+    assert melody_track(song) == 0
+    assert melody_track(Song("y.mid", "midi", events[:12], [Track(0, "Lead", 12, 72, 76)])) is None
+
+
+def test_transpose_prefers_where_the_voice_has_most_takes():
+    from vsampler.auto import best_transpose
+    from vsampler.models import Take
+    many = [Take("v.mp4", 1, 1.3), Take("v.mp4", 2, 2.3), Take("v.mp4", 3, 3.3)]
+    slots = {n: ClipSlot("v.mp4", 0, 0.3, n, extra_takes=list(many)) for n in range(48, 56)}   # the voice
+    slots.update({n: ClipSlot("band.mp4", 0, 0.3, n) for n in range(60, 68)})                  # a few loud trumpet notes
+    events = [NoteEvent(i * 0.5, i * 0.5 + 0.4, 60 + i % 6, track=0) for i in range(12)]
+    song = Song("x.mid", "midi", events, [Track(0, "Lead", 12, 60, 65)])
+    t = best_transpose(song, SongOptions(), slots)
+    assert all(48 <= 60 + k + t <= 55 for k in range(6))    # moved down into the voice's notes

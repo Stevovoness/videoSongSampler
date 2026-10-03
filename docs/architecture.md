@@ -69,9 +69,16 @@ The GUI (`vsampler/gui/`) edits a single `Project` held by `AppState`. It listen
   caption area). `apply` returns a copy, because the compositor reuses cached frames.
 - **Loudness:** `renderer.set_loudness` scales the mix to `loudness_db` (dBFS RMS of the sound, the same measure
   as clip levelling) with a soft limiter above 0.9, so it never clips.
+- **Long videos and speech:** `auto.find_clips` cuts each video into ~10-minute pieces with `media.split_video`
+  (packet copy at keyframes, folder named from the file's size and date so it's reused), then analyses each piece.
+  The clips point into the pieces, so the renderer never loads a 2-hour sound track. For speech it passes
+  `clipfinder.VOICE_RANGE` and `VOICE_RESOLUTION`, and `workers` > 1 runs pYIN's 30 s chunks in a process pool
+  (one maths thread each). Each piece's candidates are saved as `<piece>.clips-<fmin>-<fmax>.json`, stamped with
+  the piece's size and date.
 - **Automatic projects:** `auto.build_slots` groups clip-finder candidates by note (most confident first, then
   takes, optionally cut to `max_fragment`). The loudest hits go on kick, snare and hi-hat. `best_transpose` tries
-  -12..12 with `make_plan`, scoring exact 1, octave 0.9 and pitch-shifted 0.5. `report_for` gives the coverage and
+  -24..24 with `make_plan`, scoring exact 1, octave 0.9 and pitch-shifted 0.5, minus a small penalty for
+  each octave between the tune's middle note and `clip_centre` (the take-weighted middle of the clips). `report_for` gives the coverage and
   every clip's source and times.
 - **Screen fitting** (`gui/screen.py`): `ScreenGuard` is installed on the app in `main.py` and keeps every
   top-level window inside the screen's available area. It also caps the minimum size Qt derives from the layout.
@@ -82,7 +89,8 @@ The GUI (`vsampler/gui/`) edits a single `Project` held by `AppState`. It listen
 |---|---|
 | `main.py` | Entry point: the GUI, or the command line (`analyse`, `auto`, `render`, old `--render`) via `vsampler/cli.py` |
 | `vsampler/cli.py`, `vsampler/__main__.py` | Command line (`python -m vsampler …`): JSON out, progress to stderr and `<out>.log`, exit codes |
-| `vsampler/auto.py` | `auto_project`, `find_clips`, `build_slots`, `best_transpose`, `report_for` (`AutoReport`) |
+| `vsampler/auto.py` | `auto_project`, `find_clips`, `build_slots`, `melody_track`, `best_transpose`, `report_for` (`AutoReport`) |
+| `vsampler/media.py` | `split_video` (cut long videos into pieces without re-encoding), `duration` |
 | `vsampler/models.py` | Data classes: `ClipSlot`, `NoteEvent`, `Song`, `SongOptions`, `TextOverlay`, `RenderSettings`, `Project` (+ JSON), `PRESETS` / `apply_preset` |
 | `vsampler/notes.py` | Note-name ↔ MIDI helpers |
 | `vsampler/drums.py` | GM drum names, the `CORE_KIT` pad layout, drum families, drum key helpers |

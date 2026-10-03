@@ -82,6 +82,10 @@ two weeks, while you see what the AI picks. Switch to `auto` once you trust it. 
     to `max_takes` more as takes. Percussive hits go on kick, snare and hi-hat if the song has drums.
   - It turns on octave jump and short pitch-shifts, and picks the transpose that plays the most of the song.
   - `max_fragment` cuts every clip to at most that many seconds.
+  - Long videos are cut into 10-minute pieces, and speech is analysed over the voice range on all CPU cores: a
+    43-minute speech takes about 5 minutes on 8 cores. Each piece's analysis is saved, so trying other songs on the
+    same footage is instant.
+  - With a piano arrangement, only the tune's track plays (`melody_track`).
   - `AutoReport` gives `coverage` (0–1), the exact / octave / pitch-shifted / missing counts, the transpose, and
     every clip used with its source file and times (provenance).
 - **`vsampler/cli.py`**: the command line (also `python main.py …` and `python -m vsampler …`). It prints JSON

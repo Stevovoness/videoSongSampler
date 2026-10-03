@@ -14,7 +14,20 @@ up (see the workflow in [CLAUDE.md](../CLAUDE.md)). Items marked *(you)* need th
 - [x] `requirements-server.txt` and `Dockerfile`
 - [x] `docs/autopilot.md`: architecture and workflow of the whole automation
 - [ ] Test-build the Docker image and run the tests inside it (needs Docker)
-- [ ] Try `auto` on real speech footage and tune the clip finder for speech if coverage is low
+- [x] Try `auto` on real speech footage and tune the clip finder for speech (long videos cut into pieces, voice
+      range, coarser pitch grid, all CPU cores, saved analyses; tune picks its track and is centred on the voice)
+- [ ] **Show the speaker, not B-roll:** check each clip's frame for a face (OpenCV) and prefer takes with one;
+      drop clips with no face when there are enough others
+- [ ] **Keep the face in shot:** when a 16:9 clip is cropped to 9:16, centre the crop on the face, not the frame
+- [ ] **Hide burned-in banners:** crop off the source's own captions/tickers (e.g. the White House banner along the
+      bottom), first as a setting, later found automatically (the part of the frame that never changes)
+- [ ] **Choose who sings:** group clips by speaker (face or voice) so a video can be one person singing
+- [ ] Speed up the clip finder's start-up for each part (~40 s before pitch tracking starts)
+- [ ] `interstellar-suite-hans-zimmer.mxl` won't load ("largest tick … likely corrupt"): find out why
+- [ ] **Choose a section of the song in the app** (Step 2): set a start and end (e.g. drag on the piano roll, or
+      "chorus only"), so previews and the final render only make that part instead of the whole 4-minute song.
+      The engine already supports it (`SongOptions.start_s` / `end_s`, `--start` / `--end` on the command line).
+      Remember the section in the project file.
 - [ ] Optional: Shorts preset and text-overlay editor in the app's Step 3
 
 ## 2. Server

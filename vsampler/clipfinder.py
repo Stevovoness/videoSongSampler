@@ -6,7 +6,9 @@ resize these and turns them into clip slots that point into the long video.
 """
 from __future__ import annotations
 
+import os
 import threading
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from typing import Callable
 
@@ -25,6 +27,10 @@ MIN_NOTE = 0.12           # shortest note worth suggesting (seconds)
 MAX_NOTE = 2.0            # longest suggested clip; longer held notes are cut to this
 PITCH_TOL = 0.5           # semitones a note may wander from its running median
 MAX_HIT = 0.6
+
+FULL_RANGE = (60.0, 4200.0)   # Hz: singing and instruments
+VOICE_RANGE = (60.0, 600.0)   # Hz: speaking voices; pitch tracking is ~4x faster over this narrower range
+VOICE_RESOLUTION = 0.25       # semitones between pitch candidates for speech (0.1 for music): ~6x faster again
 
 ProgressFn = Callable[[float, str], None]
 
@@ -75,36 +81,70 @@ def _overview(mono: np.ndarray, n: int = 4000) -> np.ndarray:
     return (peaks / top).astype(np.float32) if top > 0 else peaks.astype(np.float32)
 
 
-def _pitch_track(y: np.ndarray, progress: ProgressFn, cancel: threading.Event | None):
+def _pyin(seg: np.ndarray, fmin: float, fmax: float, resolution: float = 0.1) -> tuple[np.ndarray, np.ndarray]:
     import librosa
 
+    f0, _v, prob = librosa.pyin(seg, fmin=fmin, fmax=fmax, sr=_FR, frame_length=2048, hop_length=_HOP,
+                                resolution=resolution)
+    return f0, prob
+
+
+def _pitch_track(y: np.ndarray, progress: ProgressFn, cancel: threading.Event | None,
+                 fmin: float = FULL_RANGE[0], fmax: float = FULL_RANGE[1], workers: int = 1,
+                 resolution: float = 0.1):
     n = 1 + len(y) // _HOP
     f0 = np.full(n, np.nan)
     prob = np.zeros(n)
     chunk = _CHUNK_S * _FR // _HOP * _HOP
     pad = 2048 // _HOP * _HOP
-    starts = list(range(0, len(y), chunk))
-    for ci, s in enumerate(starts):
-        if cancel is not None and cancel.is_set():
-            raise FinderCancelled()
-        progress(0.05 + 0.8 * ci / len(starts), f"Listening for notes… {int(100 * ci / len(starts))}%")
+    jobs = []
+    for s in range(0, len(y), chunk):
         a = max(0, s - pad)
-        seg = y[a: s + chunk + pad]
-        if len(seg) < 2048:
-            continue
-        cf0, _v, cp = librosa.pyin(seg, fmin=60.0, fmax=4200.0, sr=_FR, frame_length=2048, hop_length=_HOP)
+        if len(y[a: s + chunk + pad]) >= 2048:
+            jobs.append((s, a))
+
+    def store(s: int, a: int, cf0: np.ndarray, cp: np.ndarray) -> None:
         g0 = a // _HOP
         lo, hi = s // _HOP, min(n, (s + chunk) // _HOP)
         for i in range(len(cf0)):
             g = g0 + i
             if lo <= g < hi:
                 f0[g], prob[g] = cf0[i], cp[i]
+
+    def report(done: int) -> None:
+        if cancel is not None and cancel.is_set():
+            raise FinderCancelled()
+        progress(0.05 + 0.8 * done / max(1, len(jobs)), f"Listening for notes… {int(100 * done / max(1, len(jobs)))}%")
+
+    if workers > 1 and len(jobs) > 1:   # pYIN is pure Python/numpy: separate processes run it in parallel
+        # one maths thread per process, or the processes fight over the cores (the children read these at start)
+        for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS"):
+            os.environ.setdefault(k, "1")
+        with ProcessPoolExecutor(max_workers=min(workers, len(jobs))) as ex:
+            futs = [(s, a, ex.submit(_pyin, y[a: s + chunk + pad], fmin, fmax, resolution)) for s, a in jobs]
+            try:
+                for done, (s, a, fut) in enumerate(futs):
+                    report(done)
+                    store(s, a, *fut.result())
+            except BaseException:
+                ex.shutdown(wait=False, cancel_futures=True)
+                raise
+    else:
+        for done, (s, a) in enumerate(jobs):
+            report(done)
+            store(s, a, *_pyin(y[a: s + chunk + pad], fmin, fmax, resolution))
     return f0, prob
 
 
 def analyse(audio: np.ndarray, sr: int = SR, progress: ProgressFn = _noop,
-            cancel: threading.Event | None = None) -> FinderResult:
-    """Suggest every note and hit clip point in a recording (stereo or mono audio at `sr`)."""
+            cancel: threading.Event | None = None, pitch_range: tuple[float, float] = FULL_RANGE,
+            workers: int = 1, resolution: float = 0.1) -> FinderResult:
+    """Suggest every note and hit clip point in a recording (stereo or mono audio at `sr`).
+
+    pitch_range: lowest and highest pitch (Hz) to listen for; VOICE_RANGE is much faster for speech.
+    workers: >1 tracks pitch in that many processes at once (for the command line; the window uses 1).
+    resolution: semitones between the pitches pYIN considers; VOICE_RESOLUTION is much faster.
+    """
     import librosa
 
     duration = audio.shape[-1] / sr
@@ -114,7 +154,7 @@ def analyse(audio: np.ndarray, sr: int = SR, progress: ProgressFn = _noop,
     mono = audio.mean(axis=0) if audio.ndim == 2 else audio
     progress(0.0, "Reading the sound…")
     y = librosa.resample(mono.astype(np.float32), orig_sr=sr, target_sr=_FR)
-    f0, prob = _pitch_track(y, progress, cancel)
+    f0, prob = _pitch_track(y, progress, cancel, pitch_range[0], pitch_range[1], workers, resolution)
     n = len(f0)
     progress(0.88, "Finding the clip points…")
     rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=_HOP)[0]
