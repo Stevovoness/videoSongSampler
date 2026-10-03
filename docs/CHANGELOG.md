@@ -8,6 +8,8 @@ Every change gets a line here (see the workflow in [CLAUDE.md](../CLAUDE.md)). N
   refused to start because the run was busy, so "Different clips", "Different idea", a different song part,
   writing and applying text did nothing and the run stayed "Starting…". Jobs now start properly, and one that
   fails shows its error instead of leaving the run stuck.
+- **Fixed: "Access is denied" while a job ran.** On Windows, saving the run's progress failed whenever the review
+  page was reading it at the same moment. Both now retry for up to a second.
 - **You can always see what the review page is doing:** a banner that stays at the top of the screen while you
   scroll, with a spinner, the job ("Making the video from 55.2–77.2 s of the song…"), the current step, a
   percentage bar and the time so far; the video is dimmed with "Making a new version…"; the button you pressed

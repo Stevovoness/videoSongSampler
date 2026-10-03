@@ -362,3 +362,34 @@ def test_background_jobs_run_and_show_progress(project_dir, monkeypatch):
     assert web.post(url + "/action", params=q, json={"action": "regenerate_video"}).status_code == 200
     s = _wait(web, url, q)
     assert s["busy"] == "" and "disk full" in s["error"] and "regenerate_video" in s["actions"]
+
+
+def test_state_saves_while_the_page_reads_it(project_dir):
+    """Saving and reading a run's state at the same time (job vs. page) must never fail on Windows."""
+    import threading
+
+    from autopilot.pipeline import Pipeline
+
+    pipe = Pipeline(make_cfg(project_dir, "data7"))
+    run = pipe.new_run(date(2026, 10, 3), idea="Test Person — Test Tune")
+    errors, stop = [], threading.Event()
+
+    def reader():
+        while not stop.is_set():
+            try:
+                pipe.load(run.id)
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+
+    threads = [threading.Thread(target=reader) for _ in range(3)]
+    for t in threads:
+        t.start()
+    try:
+        for i in range(300):
+            run.progress = i / 300
+            pipe.save(run)
+    finally:
+        stop.set()
+        for t in threads:
+            t.join()
+    assert errors == [] and pipe.load(run.id).progress == pytest.approx(299 / 300)

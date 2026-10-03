@@ -95,7 +95,8 @@ Every change is saved to `runs/<id>/state.json`, so a restart picks the run up w
 background thread: the server first `claim`s the run (sets `task`, e.g. "Making the video from 55–77 s of the
 song", and `busy`), then `act(..., claimed=True)` does the work while the page polls `busy` (the current step),
 `progress` and `elapsed` and shows them in a banner that stays on screen. A job that fails clears `busy` and sets
-`error`. A server restart clears a job that was cut off.
+`error`. A server restart clears a job that was cut off. Saving and reading `state.json` retry for up to a second
+(`_retry`), because on Windows a file can't be replaced while the page is reading it.
 
 ### The full design
 Each step either passes something to the next one, or ends the day's run cleanly with a logged reason and a

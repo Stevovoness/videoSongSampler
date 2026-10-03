@@ -47,6 +47,18 @@ class InvalidAction(Exception):
     pass
 
 
+def _retry(fn, tries: int = 40, wait: float = 0.025):
+    """On Windows a file can't be replaced while someone is reading it (the review page checks the state every
+    second or so, while a job saves its progress): try again for up to a second."""
+    for i in range(tries):
+        try:
+            return fn()
+        except PermissionError:
+            if i == tries - 1:
+                raise
+            time.sleep(wait)
+
+
 @dataclass
 class Run:
     id: str
@@ -99,10 +111,11 @@ class Pipeline:
             d.mkdir(parents=True, exist_ok=True)
             tmp = d / "state.json.tmp"
             tmp.write_text(json.dumps(asdict(run), indent=2, ensure_ascii=False), encoding="utf-8")
-            tmp.replace(d / "state.json")
+            _retry(lambda: tmp.replace(d / "state.json"))
 
     def load(self, run_id: str) -> Run:
-        data = json.loads((self.dir(run_id) / "state.json").read_text(encoding="utf-8"))
+        text = _retry(lambda: (self.dir(run_id) / "state.json").read_text(encoding="utf-8"))
+        data = json.loads(text)
         return Run(**{k: v for k, v in data.items() if k in Run.__dataclass_fields__})
 
     def runs(self) -> list[Run]:
