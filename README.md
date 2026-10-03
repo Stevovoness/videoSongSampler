@@ -67,6 +67,21 @@ When a note lasts longer than its clip, the clip is **time-stretched without cha
 untouched and the rest is stretched. The video uses the same time map (slowed, with frame blending), so the
 picture stays in sync with the sound.
 
+### Shorts, text and the command line
+- Pick **Vertical / phone (1080×1920)** in Step 3 for YouTube Shorts, Instagram Reels and TikTok.
+- Project files can hold **text on the video**: a hook line at the top, timed captions, a call to action at the
+  end, and a watermark. Text stays clear of the buttons and captions those apps draw over the video. A project
+  can also play an **outro** video after the song, and play only **part of the song** (`start_s` / `end_s`).
+- The **command line** builds and renders without the window:
+  ```
+  python main.py analyse speech.mp4                      # every note and hit the clip finder hears (JSON)
+  python main.py auto --videos speech.mp4 --song tune.mid --preset shorts --overlays text.json --out short.mp4
+  python main.py render my_song.vsproj out.mp4
+  ```
+  `auto` picks the clips, the takes and the key by itself, and writes `short.vsproj` and `short.report.json`
+  (how much of the song the clips cover, and where every clip came from). Run `python main.py auto --help` for
+  every option. The same works on a Linux server: see `Dockerfile` and [docs/autopilot.md](docs/autopilot.md).
+
 ## Download and run (Windows 10/11, 64-bit)
 
 Go to [**Releases**](https://github.com/Stevovoness/videoSongSampler/releases/latest) and download one of:
@@ -114,6 +129,7 @@ gh release create v<version> release\* --title "Video Sampler <version>" --notes
 - [docs/architecture.md](docs/architecture.md): how the code fits together
 - [docs/releasing.md](docs/releasing.md): building and publishing a release
 - [docs/CHANGELOG.md](docs/CHANGELOG.md): what changed in each version
+- [docs/autopilot.md](docs/autopilot.md): the daily Shorts automation and custom-video service (design and status)
 - [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md): rules for AI agents. **After every change: run the tests,
   update the docs and changelog, then commit and push to git.**
 
@@ -130,10 +146,12 @@ gh release create v<version> release\* --title "Video Sampler <version>" --notes
 | `vsampler/importers/` | MIDI, MusicXML, audio (basic-pitch) and sheet-music (Audiveris) importers |
 | `vsampler/planner.py` | Maps song notes and drum hits to clips: octave jumps, nearest-clip borrowing, drum stand-ins |
 | `vsampler/drums.py` | General MIDI drum names, the drum pad layout and drum families |
-| `vsampler/render/` | Collage layouts, frame compositor, MP4 encoder (PyAV / x264 + AAC) |
+| `vsampler/render/` | Collage layouts, frame compositor, text overlays, MP4 encoder (PyAV / x264 + AAC) |
+| `vsampler/auto.py`, `vsampler/cli.py` | Building a project with no one at the controls; the command line |
 | `vsampler/gui/` | PySide6 interface (piano keyboard, drum pads, low-latency sample pad) |
 
 ## Licences
 Bundled third-party tools, redistributed unmodified:
 - Rubber Band (`tools/rubberband`): GPL-2.0-or-later. See `tools/rubberband/COPYING.txt`.
 - Audiveris (in the release builds): AGPL-3.0, source at https://github.com/Audiveris/audiveris.
+- Anton font (`assets/fonts`): SIL Open Font License 1.1. See `assets/fonts/OFL.txt`.

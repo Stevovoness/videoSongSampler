@@ -1,0 +1,11 @@
+.venv*/
+.git/
+build/
+dist/
+release/
+installer/
+tools/
+**/__pycache__/
+*.mp4
+*.mov
+*.vsproj

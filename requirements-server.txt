@@ -1,0 +1,21 @@
+# Engine-only dependencies for running Video Sampler headless on a Linux server (no window, no installer).
+# Install with:
+#   pip install -r requirements-server.txt
+#   pip install --no-deps basic-pitch==0.4.0
+# System packages (Debian/Ubuntu): rubberband-cli (pitch-preserving stretch) and fonts-noto-color-emoji
+# (emoji in text overlays). See Dockerfile and docs/autopilot.md.
+av>=12
+numpy>=1.24
+scipy>=1.10
+opencv-python-headless>=4.8
+Pillow>=10
+librosa>=0.10
+soundfile>=0.12
+pretty_midi>=0.2.10
+music21>=9.1
+onnxruntime>=1.16
+mir-eval>=0.6
+resampy>=0.2.2,<0.4.3
+scikit-learn
+typing-extensions
+pytest>=7

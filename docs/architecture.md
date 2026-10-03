@@ -8,8 +8,12 @@ clips (videos) ──analyze_clip──▶ Project.slots / Project.drum_slots   
 song file ──importers.load_song──▶ Song (NoteEvent list, tracks; drum events have drum=True)
 Song + SongOptions ──songops.apply_options──▶ events to play (transpose, tempo, melody-only, track choice)
 events + slots ──planner.make_plan──▶ Plan (NoteInstance per sounding note, plus missing / borrowed / octave / stand-in)
-Plan ──render.renderer──▶ audio mix (audio_dsp.render_note) + video frames (render.compositor) ──▶ MP4 (PyAV)
+Plan ──render.renderer──▶ audio mix (audio_dsp.render_note) + video frames (render.compositor)
+     ──▶ + outro video, text overlays (render.overlays), loudness ──▶ MP4 (PyAV)
 ```
+Without the window: `cli.py` (`analyse`, `auto`, `render`) drives the same engine. `auto.auto_project` replaces the
+person at the controls: long videos ──clipfinder──▶ slots and takes ──best_transpose──▶ Project + `AutoReport`.
+The daily Shorts automation built on top of this is described in [autopilot.md](autopilot.md).
 The GUI (`vsampler/gui/`) edits a single `Project` held by `AppState`. It listens to the `slots_changed`,
 `song_changed`, `options_changed` and `project_replaced` signals, and runs slow work off the UI thread with
 `worker.run_task`.
@@ -51,6 +55,24 @@ The GUI (`vsampler/gui/`) edits a single `Project` held by `AppState`. It listen
   and levelling as the render) and keeps it in memory. A small mixer (`_Mixer`, a `QIODevice`) streams to a
   `QAudioSink` in pull mode, so presses overlap and restart reliably. `warm()` gets every take ready after the
   slots change. Don't go back to `QSoundEffect`: restarting it is unreliable on Windows.
+- **Song excerpt and length:** `SongOptions.start_s` / `end_s` (seconds in the song file) are applied first in
+  `songops.apply_options`, so only notes starting inside the excerpt play, cut off at its end. Then tempo and the
+  usual "start right away" shift apply. `RenderSettings.max_duration` is applied in `renderer.prepare`: notes
+  after it are dropped and sounding ones are cut at it.
+- **Presets:** `models.PRESETS` / `apply_preset` set several `RenderSettings` at once. `shorts` is 1080×1920,
+  dynamic layout, no labels, ≤ 55 s, `loudness_db` -14.
+- **Overlays and outro:** `render_video` mixes the song, then appends `RenderSettings.outro` (a whole video,
+  levelled to the song's loudness, frames scaled with `layouts.cover`). Every frame, song or outro, goes through
+  `overlays.OverlayPainter.apply`. Overlay times are in the finished video (a negative start counts from the end).
+  Text is drawn with Pillow (bundled Anton font plus the system colour-emoji font), each block rendered once and
+  cached, and placed inside `overlays.safe_area` (vertical videos avoid the right-hand buttons and bottom
+  caption area). `apply` returns a copy, because the compositor reuses cached frames.
+- **Loudness:** `renderer.set_loudness` scales the mix to `loudness_db` (dBFS RMS of the sound, the same measure
+  as clip levelling) with a soft limiter above 0.9, so it never clips.
+- **Automatic projects:** `auto.build_slots` groups clip-finder candidates by note (most confident first, then
+  takes, optionally cut to `max_fragment`). The loudest hits go on kick, snare and hi-hat. `best_transpose` tries
+  -12..12 with `make_plan`, scoring exact 1, octave 0.9 and pitch-shifted 0.5. `report_for` gives the coverage and
+  every clip's source and times.
 - **Screen fitting** (`gui/screen.py`): `ScreenGuard` is installed on the app in `main.py` and keeps every
   top-level window inside the screen's available area. It also caps the minimum size Qt derives from the layout.
   Use `preferred_size()` for a window's starting size and `scrollable()` around big content.
@@ -58,8 +80,10 @@ The GUI (`vsampler/gui/`) edits a single `Project` held by `AppState`. It listen
 ## Files
 | Path | What it does |
 |---|---|
-| `main.py` | Entry point: the GUI, or `--render project.vsproj out.mp4` from the command line |
-| `vsampler/models.py` | Data classes: `ClipSlot`, `NoteEvent`, `Song`, `SongOptions`, `RenderSettings`, `Project` (+ JSON) |
+| `main.py` | Entry point: the GUI, or the command line (`analyse`, `auto`, `render`, old `--render`) via `vsampler/cli.py` |
+| `vsampler/cli.py`, `vsampler/__main__.py` | Command line (`python -m vsampler …`): JSON out, progress to stderr and `<out>.log`, exit codes |
+| `vsampler/auto.py` | `auto_project`, `find_clips`, `build_slots`, `best_transpose`, `report_for` (`AutoReport`) |
+| `vsampler/models.py` | Data classes: `ClipSlot`, `NoteEvent`, `Song`, `SongOptions`, `TextOverlay`, `RenderSettings`, `Project` (+ JSON), `PRESETS` / `apply_preset` |
 | `vsampler/notes.py` | Note-name ↔ MIDI helpers |
 | `vsampler/drums.py` | GM drum names, the `CORE_KIT` pad layout, drum families, drum key helpers |
 | `vsampler/clipfinder.py` | Suggests every note and hit clip point in a long recording (`analyse`, `best_takes`, `refine`) |
@@ -71,11 +95,14 @@ The GUI (`vsampler/gui/`) edits a single `Project` held by `AppState`. It listen
 | `vsampler/render/sources.py` | Cache of decoded clip audio and frames (`get_source`, `trimmed_audio`) |
 | `vsampler/render/renderer.py` | `prepare`, `mix_audio`, `render_video`, `render_audio_preview`, `render_slot_audio` |
 | `vsampler/render/compositor.py`, `layouts.py` | Grid / "only who's singing" frame building |
+| `vsampler/render/overlays.py` | Text overlays (`OverlayPainter`, `STYLES`, `safe_area`) |
 | `vsampler/gui/main_window.py` | Window, menus, project open / save, help text |
 | `vsampler/gui/clips_tab.py` | Step 1: Notes / Drums switch, keyboard and pads, computer-keyboard play, clip details and takes; long videos go to the clip finder |
 | `vsampler/gui/clip_finder.py` | The clip finder window: suggestions list, chips, selected-clip panel, adding clips as takes |
 | `vsampler/gui/song_tab.py` | Step 2: song loading, tracks, transpose and speed, Octave jump, missing notes and drums panel |
 | `vsampler/gui/output_tab.py` | Step 3: look settings, preview frame, rendering |
 | `vsampler/gui/widgets/` | `keyboard.py` (piano), `drum_pads.py`, `piano_roll.py`, `sampler.py` (sample pad, rotates takes), `timeline.py` (clip finder timeline), `player.py` |
-| `tests/` | `pytest` suite. `fixtures.py` makes synthetic clips and MIDI files |
+| `tests/` | `pytest` suite (`test_engine.py`, `test_automation.py`). `fixtures.py` makes synthetic clips and MIDI files |
+| `Dockerfile`, `requirements-server.txt` | Engine-only Linux image for a server (see `autopilot.md`) |
+| `assets/fonts/` | Anton (SIL OFL), the overlay font |
 | `build_exe.py`, `VideoSampler.spec`, `installer/`, `setup_tools.py` | Release build (see `releasing.md`) |

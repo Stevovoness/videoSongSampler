@@ -4,6 +4,25 @@ Every change gets a line here (see the workflow in [CLAUDE.md](../CLAUDE.md)). N
 **Unreleased** until a version is released.
 
 ## Unreleased
+
+## 1.4.0
+- **Shorts / Reels / TikTok format.** A `shorts` preset makes a vertical 1080×1920 video under a minute, in the
+  "only who's singing" layout, without note labels and at the loudness of other short videos (`apply_preset`).
+- **Text on the video.** `RenderSettings.overlays` holds text lines: a big hook at the top (it shrinks after 3 s),
+  timed captions, a call-to-action card and a watermark. Text wraps, fits, shows colour emoji and stays clear of
+  the app buttons and captions on phones (`render/overlays.py`, drawn with the bundled Anton font).
+- **Outro.** `RenderSettings.outro` plays a video after the song (e.g. a personal sign-off), at the song's loudness.
+- **Play part of a song.** `SongOptions.start_s` / `end_s` pick the catchy section; `RenderSettings.max_duration`
+  cuts the video's song part to a length; `RenderSettings.loudness_db` sets the finished loudness.
+- **Automatic projects.** `vsampler/auto.py` builds a whole project from long videos and a song: the best clip of
+  every note (more become takes), drum hits on pads, the key change that plays the most of the song, and a report
+  of how much of the song is covered and where every clip came from.
+- **Command line.** `main.py analyse | auto | render …` (also `python -m vsampler …`), with JSON output and exit
+  codes. The old `--render project out.mp4` still works.
+- **Runs on a Linux server.** `requirements-server.txt` and a `Dockerfile` (engine only, no window).
+- `docs/autopilot.md` describes the planned daily Shorts automation and custom-video service, and what is built.
+- Project files gain `overlays`, `outro`, `preset`, `max_duration`, `loudness_db`, `start_s`, `end_s`. Older files
+  still open.
 - `build_exe.py` empties `release/` and `installer/Output/` first, so leftovers from an interrupted build can't be
   published alongside the new files.
 

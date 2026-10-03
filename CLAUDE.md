@@ -12,7 +12,9 @@ finish a task or hand back to the user until all of them are done.
    - `docs/CHANGELOG.md`: add a line under **Unreleased** (or under the new version if you bumped it).
    - `README.md`: for anything a user sees (features, buttons, keyboard shortcuts, requirements).
    - `docs/architecture.md`: when you add, rename or move modules, or change how the engine works.
-   - `docs/releasing.md`: when the build, installer or release steps change.
+   - `docs/releasing.md`: when the build, installer, server image or release steps change.
+   - `docs/autopilot.md`: when the command line, `auto.py`, overlays, the server image or the planned
+     automation (`autopilot/`) change. Keep its **Status** table current.
    - This file: when the workflow or the project's conventions change.
 3. **Commit and push to git:**
    ```
@@ -29,7 +31,8 @@ A Windows desktop app (Python 3.11, PySide6) that turns short video clips of sin
 into a song plus a collage music video. See `README.md` for features and `docs/architecture.md` for how the code
 fits together.
 
-- Run from source: `.venv\Scripts\python main.py`
+- Run from source: `.venv\Scripts\python main.py` (window), or `.venv\Scripts\python main.py auto|analyse|render …`
+  (command line, see `vsampler/cli.py`).
 - Set up a fresh environment: see "From source" in `README.md` (create the venv with `py -3.11`).
 - Build the release (installer and portable zip): `.venv\Scripts\python build_exe.py`. Full steps are in
   `docs/releasing.md`.
@@ -45,6 +48,8 @@ fits together.
   in `gui/screen.scrollable()`, keep important buttons outside the scrolling part, and avoid big fixed minimum
   sizes. `ScreenGuard` (installed in `main.py`) is the safety net.
 - User-facing text is friendly and non-technical (the app is aimed at non-musicians).
+- The engine must keep working headless on Linux (the automation server, `Dockerfile`). Don't add Windows-only
+  calls to it, and add new engine dependencies to `requirements-server.txt` as well.
 - Save files (`.vsproj`) must stay backward compatible. `Project.from_json` ignores unknown fields and fills in
   missing ones.
 - On Windows PowerShell 5.1, read files with `-Encoding UTF8`. The source contains non-ASCII characters

@@ -37,13 +37,18 @@ def enabled_tracks(song: Song, opts: SongOptions, include_drums: bool = False) -
 
 
 def apply_options(song: Song, opts: SongOptions, include_drums: bool = False) -> list[NoteEvent]:
-    """Events to play. Transpose and melody-only apply to pitched notes only; speed applies to everything."""
+    """Events to play. Transpose and melody-only apply to pitched notes only; speed applies to everything.
+
+    With `opts.start_s` / `opts.end_s`, only notes starting in that part of the song play (cut off at its end).
+    """
     enabled = enabled_tracks(song, opts, include_drums)
     scale = 100.0 / max(1.0, opts.tempo_pct)
+    a = max(0.0, opts.start_s or 0.0)
+    b = opts.end_s if opts.end_s is not None else float("inf")
     evs = [
-        NoteEvent(e.start * scale, e.end * scale, e.pitch + (0 if e.drum else opts.transpose), e.velocity, e.track,
-                  e.drum)
-        for e in song.events if e.track in enabled
+        NoteEvent((e.start - a) * scale, (min(e.end, b) - a) * scale, e.pitch + (0 if e.drum else opts.transpose),
+                  e.velocity, e.track, e.drum)
+        for e in song.events if e.track in enabled and a <= e.start < b
     ]
     evs = [e for e in evs if 0 <= e.pitch <= 127]
     if opts.melody_only:

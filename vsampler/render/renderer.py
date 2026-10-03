@@ -18,6 +18,8 @@ from ..models import ClipSlot, Project, Song
 from ..planner import Plan, plan_for_project
 from ..songops import apply_options
 from .compositor import Compositor
+from .layouts import cover
+from .overlays import OverlayPainter
 from .sources import AudioSource, ClipSource, get_audio_source, get_source, source_key, trimmed_audio
 
 ProgressFn = Callable[[float, str], None]
@@ -111,6 +113,12 @@ def prepare(project: Project, song: Song, progress: ProgressFn = _noop,
     if max_seconds is not None:
         first = min(i.start for i in plan.instances)
         plan.instances = [i for i in plan.instances if i.start < first + max_seconds]
+    limit = project.render.max_duration
+    if limit:   # e.g. Shorts: cut the song off, notes that are still sounding stop at the limit
+        plan.instances = [i for i in plan.instances if i.start < limit]
+        for i in plan.instances:
+            if not i.drum:
+                i.duration = max(0.03, min(i.duration, limit - i.start))
     used = sorted({(i.slot, i.take) for i in plan.instances})
     if (all_slots or not project.render.only_used_clips) and not audio_only:
         used = [(k, t) for k in all_slot_keys(project) for t in range(project_slot(project, k).take_count)]
@@ -130,6 +138,8 @@ def prepare(project: Project, song: Song, progress: ProgressFn = _noop,
         if inst.drum:   # a drum hit always plays its whole clip, as recorded (never cut short or stretched)
             inst.duration = sources[(inst.slot, inst.take)].length
     duration = max(i.start + i.duration for i in plan.instances) + project.render.tail
+    if limit:
+        duration = min(duration, limit + project.render.tail)
     return Prepared(plan, sources, duration)
 
 
@@ -173,7 +183,23 @@ def mix_audio(project: Project, prep: Prepared, progress: ProgressFn = _noop,
     peak = float(np.abs(out).max()) if out.size else 0.0
     if peak > 0:
         out *= 0.89 / peak
+    if project.render.loudness_db is not None:
+        out = set_loudness(out, project.render.loudness_db, sr)
     return out
+
+
+def set_loudness(audio: np.ndarray, target_db: float, sr: int) -> np.ndarray:
+    """Bring audio to target_db (dBFS RMS of its sound), softly limiting peaks so it never clips."""
+    loud = measure_loudness(audio, sr)
+    if loud is None:
+        return audio
+    y = audio * np.float32(10 ** ((target_db - loud) / 20))
+    knee = np.float32(0.9)
+    over = np.abs(y) > knee
+    if over.any():
+        a = np.abs(y[over])
+        y[over] = np.sign(y[over]) * (knee + (1 - knee) * np.tanh((a - knee) / (1 - knee)))
+    return y.astype(np.float32)
 
 
 PREVIEW_FADE = 0.4
@@ -196,10 +222,23 @@ def render_audio_preview(project: Project, song: Song, wav_path: str, progress: 
     return wav_path
 
 
+def _outro_source(project: Project) -> ClipSource | None:
+    """The video played after the song (RenderSettings.outro), if there is one."""
+    return get_source(ClipSlot(project.render.outro, 0.0, None)) if project.render.outro else None
+
+
 def preview_frame(project: Project, song: Song, t: float) -> np.ndarray:
     prep = prepare(project, song)
+    outro = _outro_source(project)
+    total = prep.duration + (outro.length if outro else 0.0)
     comp = Compositor(prep.plan.instances, prep.sources, prep.tile_slots, project.render)
-    return comp.frame(t)
+    return OverlayPainter(project.render, total).apply(_frame(comp, outro, prep.duration, project.render, t), t)
+
+
+def _frame(comp: Compositor, outro: ClipSource | None, song_end: float, rs, t: float) -> np.ndarray:
+    if outro is None or t < song_end:
+        return comp.frame(t)
+    return cover(outro.frames.at(outro.trim_start + min(t - song_end, outro.length)), rs.width, rs.height)
 
 
 def render_video(project: Project, song: Song, out_path: str, progress: ProgressFn = _noop,
@@ -209,9 +248,17 @@ def render_video(project: Project, song: Song, out_path: str, progress: Progress
     prep = prepare(project, song, lambda f, m: progress(f * 0.1, m), cancel)
     audio = mix_audio(project, prep, lambda f, m: progress(0.1 + f * 0.3, m), cancel)
     comp = Compositor(prep.plan.instances, prep.sources, prep.tile_slots, rs)
-
     sr = rs.sample_rate
-    n_frames = int(np.ceil(prep.duration * rs.fps))
+    song_end = audio.shape[1] / sr
+    outro = _outro_source(project)
+    if outro is not None:   # played as recorded, at the same loudness as the song
+        target = rs.loudness_db if rs.loudness_db is not None else measure_loudness(audio, sr)
+        extra = outro.audio if target is None else set_loudness(outro.audio, target, sr)
+        audio = np.concatenate([audio, extra.astype(np.float32)], axis=1)
+    total = audio.shape[1] / sr
+    painter = OverlayPainter(rs, total)
+
+    n_frames = int(np.ceil(total * rs.fps))
     container = av.open(out_path, mode="w")
     try:
         vs = container.add_stream("libx264", rate=rs.fps)
@@ -239,7 +286,7 @@ def render_video(project: Project, song: Song, out_path: str, progress: Progress
         for i in range(n_frames):
             _check(cancel)
             t = i / rs.fps
-            img = comp.frame(t)
+            img = painter.apply(_frame(comp, outro, song_end, rs, t), t)
             if img.shape[1] != W or img.shape[0] != H:
                 img = np.ascontiguousarray(img[:H, :W])
             vf = av.VideoFrame.from_ndarray(img, format="bgr24")

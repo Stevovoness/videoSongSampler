@@ -117,10 +117,30 @@ class SongOptions:
     allow_pitch_shift: bool = False          # use nearest clip for missing notes
     max_shift: int = 12
     drum_standins: bool = True               # missing drum sounds borrow a similar drum clip
+    start_s: float = 0.0                     # play only this part of the song (seconds in the song file)
+    end_s: float | None = None
     # audio-import options
     audio_onset_threshold: float = 0.5
     audio_min_note_ms: float = 120.0
     audio_melody_only: bool = True
+
+
+@dataclass
+class TextOverlay:
+    """Text drawn over the video, e.g. a hook line at the top or a caption.
+
+    `start` / `end` are seconds into the finished video; a negative `start` counts back from its end, and
+    `end` None means until the end. `position` None uses the style's usual place.
+    """
+    text: str
+    start: float = 0.0
+    end: float | None = None
+    style: str = "caption"          # hook | caption | cta | watermark
+    position: str | None = None     # top | middle | lower | bottom
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TextOverlay":
+        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
 
 @dataclass
@@ -140,6 +160,35 @@ class RenderSettings:
     tail: float = 1.0               # seconds of silence at end
     sample_rate: int = 44100
     output_path: str = ""
+    preset: str = ""                # "" (custom) | shorts | landscape; see PRESETS
+    overlays: list[TextOverlay] = field(default_factory=list)
+    max_duration: float | None = None    # cut the song part of the video to this many seconds
+    outro: str = ""                 # video played after the song (e.g. a personal sign-off)
+    loudness_db: float | None = None     # bring the finished mix to this loudness (dBFS RMS of the sound)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "RenderSettings":
+        d = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        d["overlays"] = [TextOverlay.from_dict(o) for o in d.get("overlays") or []]
+        return cls(**d)
+
+
+# Ready-made output formats. Shorts / Reels / TikTok: vertical, under a minute, loud like other short videos.
+PRESETS: dict[str, dict] = {
+    "shorts": {"width": 1080, "height": 1920, "fps": 30, "layout": "dynamic", "max_duration": 55.0,
+               "loudness_db": -14.0, "tail": 0.5, "show_labels": False},
+    "landscape": {"width": 1920, "height": 1080, "fps": 30},
+}
+
+
+def apply_preset(settings: RenderSettings, name: str) -> RenderSettings:
+    """Set the size, layout and limits of a ready-made output format (see PRESETS)."""
+    if name not in PRESETS:
+        raise ValueError(f"Unknown preset {name!r}. Choose one of: {', '.join(PRESETS)}")
+    for k, v in PRESETS[name].items():
+        setattr(settings, k, v)
+    settings.preset = name
+    return settings
 
 
 @dataclass
@@ -171,7 +220,7 @@ class Project:
         p.drum_slots = {int(k): ClipSlot.from_dict(v) for k, v in d.get("drum_slots", {}).items()}
         p.song_path = d.get("song_path", "")
         p.song = SongOptions(**{k: v for k, v in d.get("song", {}).items() if k in SongOptions.__dataclass_fields__})
-        p.render = RenderSettings(**{k: v for k, v in d.get("render", {}).items() if k in RenderSettings.__dataclass_fields__})
+        p.render = RenderSettings.from_dict(d.get("render", {}))
         p.audiveris_path = d.get("audiveris_path", "")
         return p
 
