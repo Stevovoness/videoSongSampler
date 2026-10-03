@@ -4,6 +4,11 @@ Every change gets a line here (see the workflow in [CLAUDE.md](../CLAUDE.md)). N
 **Unreleased** until a version is released.
 
 ## Unreleased
+- **Choose a different part of the song** on the review page (any step): pick one of the suggested parts (the
+  chorus first, then other parts that repeat, then the start of the song) or type your own start and end, and the
+  video is made again from that part. Tick "use this part for this song from now on" to keep it for later runs
+  (saved in `autopilot_data/songs.yaml`). From the command line: `python -m autopilot run --part 83.5-105`.
+  If the clips can't cover the chosen part, you're told and the current video stays.
 - **The automation, phase 1 (`autopilot/`).** `python -m autopilot run` picks an idea from your ideas list
   (favourites and today's seasonal theme first), finds the song file and its chorus, builds the video without
   text, and sends you a review link. On the **review page** you watch it (or ask for different clips or a

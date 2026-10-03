@@ -50,9 +50,7 @@ class Section:
     repeats: int          # how often its opening phrase comes back (more = more likely the chorus)
 
 
-def find_chorus(song: Song, seconds: float = 22.0) -> Section:
-    """The catchiest stretch of about `seconds`: it starts where the most repeated melodic phrase first
-    appears (choruses repeat; verses change). Falls back to the start of the song."""
+def _melody_notes(song: Song) -> list:
     track = melody_track(song)
     evs = sorted((e for e in song.events if not e.drum and (track is None or e.track == track)),
                  key=lambda e: (e.start, -e.pitch))
@@ -61,8 +59,23 @@ def find_chorus(song: Song, seconds: float = 22.0) -> Section:
         if notes and abs(e.start - notes[-1].start) < 0.03:
             continue
         notes.append(e)
+    return notes
+
+
+def _cut(notes: list, start: float, seconds: float, song_end: float) -> float:
+    """The end of a part starting at `start`: about `seconds` later, just after a note."""
+    end = min(song_end, start + seconds)
+    last = max((e for e in notes if start <= e.start < end), key=lambda e: e.start, default=None)
+    return round(min(end, last.end + 0.2), 2) if last is not None else round(end, 2)
+
+
+def song_parts(song: Song, seconds: float = 22.0, limit: int = 6) -> list[Section]:
+    """Parts of the song worth using, best first: where the most repeated melodic phrases appear (choruses
+    repeat; verses change), each place only once, then the start of the song. Each part is about `seconds`."""
+    notes = _melody_notes(song)
+    end_of_song = song.duration
     if len(notes) < PHRASE_NOTES + 2:
-        return Section(0.0, min(seconds, song.duration), 0)
+        return [Section(0.0, round(min(seconds, end_of_song), 2), 0)]
     beat = sorted(b.start - a.start for a, b in zip(notes, notes[1:]) if b.start > a.start)[len(notes) // 2] or 0.25
     keys = []
     for i in range(len(notes) - PHRASE_NOTES):
@@ -71,14 +84,30 @@ def find_chorus(song: Song, seconds: float = 22.0) -> Section:
         rhythm = tuple(round((b.start - a.start) / beat * 2) for a, b in zip(seg, seg[1:]))
         keys.append((intervals, rhythm))
     counts = Counter(keys)
-    # most repeated phrase; among equals, the one that starts earliest (the first chorus)
-    best = max(range(len(keys)), key=lambda i: (counts[keys[i]], -i))
-    start = max(0.0, notes[best].start - 0.1)
-    end = min(song.duration, start + seconds)
-    # end on a note boundary: just after the last note that starts before the cut
-    last = max((e for e in notes if e.start < end), key=lambda e: e.start)
-    end = min(end, last.end + 0.2)
-    return Section(round(start, 2), round(end, 2), counts[keys[best]])
+    # first where each different phrase first appears (most repeated first: the chorus, then other repeated
+    # parts like the verse), then the later times they come back
+    first: dict = {}
+    for i, k in enumerate(keys):
+        first.setdefault(k, i)
+    firsts = sorted(first.values(), key=lambda i: (-counts[keys[i]], i))
+    later = sorted((i for i in range(len(keys)) if first[keys[i]] != i), key=lambda i: (-counts[keys[i]], i))
+    order = firsts + later
+    parts: list[Section] = []
+    for i in order:
+        start = round(max(0.0, notes[i].start - 0.1), 2)
+        if any(abs(start - p.start) < seconds * 0.6 for p in parts):
+            continue                   # too close to a part already listed
+        parts.append(Section(start, _cut(notes, start, seconds, end_of_song), counts[keys[i]]))
+        if len(parts) >= limit - 1:
+            break
+    if not any(p.start < seconds * 0.6 for p in parts):
+        parts.append(Section(0.0, _cut(notes, 0.0, seconds, end_of_song), 0))
+    return parts
+
+
+def find_chorus(song: Song, seconds: float = 22.0) -> Section:
+    """The catchiest stretch of about `seconds`: where the most repeated melodic phrase first appears."""
+    return song_parts(song, seconds, limit=2)[0]
 
 
 class Library:
@@ -103,5 +132,21 @@ class Library:
         from vsampler.importers import load_song
         sec = find_chorus(load_song(str(path), SongOptions()), seconds)
         self.meta[key] = {"file": str(path), "start": sec.start, "end": sec.end, "repeats": sec.repeats}
-        self.meta_file.write_text(yaml.safe_dump(self.meta, sort_keys=True), encoding="utf-8")
+        self._write()
         return sec
+
+    def parts(self, path: Path, seconds: float) -> tuple[list[Section], float]:
+        """The song's suggested parts (best first) and its length in seconds."""
+        from vsampler.importers import load_song
+        song = load_song(str(path), SongOptions())
+        return song_parts(song, seconds), round(song.duration, 2)
+
+    def remember(self, title: str, path: Path, start: float, end: float) -> None:
+        """Use this part of the song from now on (it's what `section` returns)."""
+        key = _words(title).replace(" ", "-")
+        self.meta[key] = {**(self.meta.get(key) or {}), "file": str(path), "start": start, "end": end,
+                          "chosen": True}
+        self._write()
+
+    def _write(self) -> None:
+        self.meta_file.write_text(yaml.safe_dump(self.meta, sort_keys=True), encoding="utf-8")

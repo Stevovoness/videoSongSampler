@@ -278,3 +278,48 @@ def test_review_server_restart_clears_a_stuck_job(project_dir):
     web = TestClient(create_app(pipe, background=False))
     s = web.get(f"/api/run/{run.id}", params={"token": run.token}).json()
     assert s["busy"] == "" and "interrupted" in s["error"] and "continue" in s["actions"]
+
+
+def test_song_parts_offer_different_parts():
+    verse = [62, 65, 69, 65, 62, 60, 59, 57]
+    events, t = [], 0.0
+    for block in (verse, TUNE, TUNE, verse, TUNE, TUNE):        # verse, chorus x2, verse, chorus x2
+        for p in block:
+            events.append(NoteEvent(t, t + 0.4, p))
+            t += 0.5
+    song = Song("x.mid", "midi", events, [Track(0, "Lead", len(events), 57, 72)])
+    parts = songs.song_parts(song, seconds=6)
+    assert 3.9 <= parts[0].start <= 4.05                          # the chorus first
+    assert any(abs(p.start - 0.0) < 0.2 for p in parts)           # the verse / start of the song is offered too
+    assert len({round(p.start) for p in parts}) == len(parts) >= 2
+    assert all(p.end - p.start <= 6.01 for p in parts)
+
+
+def test_review_can_use_another_part_of_the_song(project_dir, monkeypatch):
+    import yaml
+    from fastapi.testclient import TestClient
+
+    from autopilot.pipeline import Pipeline
+    from autopilot.review.app import create_app
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    pipe = Pipeline(make_cfg(project_dir, "data5"))
+    run = pipe.build(pipe.new_run(date(2026, 10, 3)))
+    web = TestClient(create_app(pipe, background=False))
+    url, q = f"/api/run/{run.id}", {"token": run.token}
+    s = web.get(url, params=q).json()
+    assert s["parts"] and s["parts"][0]["label"] and s["song_length"] > 10 and "change_section" in s["actions"]
+    web.post(url + "/action", params=q, json={"action": "continue"})           # text drafted for the old part
+
+    bad = web.post(url + "/action", params=q, json={"action": "change_section", "start": 3, "end": 4})
+    assert bad.status_code == 400 and "seconds long" in bad.json()["detail"]
+    s = web.post(url + "/action", params=q, json={"action": "change_section", "start": 6.0, "end": 11.0,
+                                                  "remember": True}).json()
+    assert s["state"] == "built" and s["section"] == [6.0, 11.0] and s["overlays"] == []
+    assert pipe.load(run.id).version == 2
+    saved = yaml.safe_load((project_dir / "data5" / "songs.yaml").read_text(encoding="utf-8"))
+    assert saved["test-tune"]["start"] == 6.0 and saved["test-tune"]["chosen"]
+    # a new run of the same song now uses the remembered part
+    again = pipe.build(pipe.new_run(date(2026, 10, 4), idea="Test Person — Test Tune"))
+    assert (again.plan["start"], again.plan["end"]) == (6.0, 11.0)

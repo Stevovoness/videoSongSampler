@@ -71,9 +71,15 @@ description, hashtags) are in `autopilot_data/runs/<id>/`, ready to post (publis
 ### The review (approval mode)
 | Step | You see | You can |
 |---|---|---|
-| 1 · Preview | The video **without text** | **Looks good, write the text** · **Different clips** (same idea, other takes) · **Different idea** · Skip |
+| 1 · Preview | The video **without text** | **Looks good, write the text** · **Different clips** (same idea, other takes) · **Different idea** · **Different part of the song** · Skip |
 | 2 · Text | The text the writer drafted (hook, captions with times, call to action, watermark), the judge's checks, the title, description and hashtags | Edit, add or remove lines and their times · **Preview** the text on a still at the video's current time (instant) · **Rewrite the text** (with a note to the writer) · **Apply text** · Different clips · Skip |
 | 3 · Final | The video **with the text** | **Approve** · **Edit the text** (back to step 2; applying again only re-draws the text) · Different clips · Skip |
+
+**A different part of the song** (any step): the box under the video lists suggested parts (`songs.song_parts`:
+where each different repeated phrase first appears, the most repeated, the chorus, first; then the start of the
+song) and lets you type your own start and end (5–60 s). The video is made again from that part (a few minutes),
+and the text is written again after. "Use this part for this song from now on" saves it in
+`autopilot_data/songs.yaml`. On the command line: `python -m autopilot run --part 83.5-105`.
 
 Applying text never re-renders the song: `burn_overlays` draws the text on the text-free video and copies the
 sound across (`python main.py text --video base.mp4 --overlays text.json --out final.mp4` does the same by hand).
@@ -163,7 +169,7 @@ video, and a negative `start` counts back from the end:
 | `config.py`, `config.example.yaml` (+ your `config.yaml`, git-ignored) | All settings (§4). Secrets only from environment variables | Built |
 | `ideas.py` | Parses `Project combination ideas.txt` ("X singing “Song” — Artist", top-10 repeats become favourites) into `autopilot_data/ideas.yaml`; picks today's idea (can be made, not used, person not used recently, favourites and theme matches first) | Built |
 | `seasons.py`, `seasons.yaml` | Theme calendar (fixed dates, "second sunday of may", Easter-relative, US election) and today's active themes | Built |
-| `songs.py` | Finds a song's file by title in `song_dirs`; finds the chorus (the most repeated melodic phrase); saves both in `autopilot_data/songs.yaml` (edit it to override) | Built |
+| `songs.py` | Finds a song's file by title in `song_dirs`; suggests parts of the song (`song_parts`: the chorus first, then other repeated parts) and uses the chorus by default; saves the chosen part in `autopilot_data/songs.yaml` (edit it, or tick "remember" on the review page, to override) | Built |
 | `footage.py`, `people.yaml` | Who can sing: tier, local footage globs, official channels. Local files first; YouTube search and download with `YOUTUBE_API_KEY` | Local built; YouTube untested |
 | `build.py` | Idea → plan (person, song file, chorus, footage) → `vsampler.auto` (with `seed` for "different clips") → coverage check → `base.mp4` without text | Built |
 | `context.py` | What happens in this render: phrases, the words each note was cut from (faster-whisper, only the 30 s blocks used, cached), what was said around them, frames, sources | Built |

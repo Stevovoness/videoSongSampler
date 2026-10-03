@@ -59,6 +59,7 @@ up (see the workflow in [CLAUDE.md](../CLAUDE.md)). Items marked *(you)* need th
       final video, approve; regenerate the video or the idea at any step
 - [x] `vsampler text`: add text to a finished video without re-rendering
 - [ ] Try the writer with a real Claude API key (`ANTHROPIC_API_KEY`) and tune `style.md` on real results
+- [x] Choose a different part of the song on the review page (suggested parts or your own times; `--part`)
 - [ ] Editable title / description / hashtags on the review page
 - [ ] Review page on the server behind HTTPS (Caddy), with the link sent by Telegram
 - [x] `ideas.py` + `ideas.yaml`: turn `Project combination ideas.txt` into a queue of {person, song, tier}

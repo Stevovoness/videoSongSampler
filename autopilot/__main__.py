@@ -1,6 +1,6 @@
 """python -m autopilot …
 
-    run [--idea "Donald Trump — Fireflies"] [--date 2026-12-20] [--no-serve]
+    run [--idea "Donald Trump — Fireflies"] [--part 83.5-105] [--date 2026-12-20] [--no-serve]
         Make today's video. In approval mode it builds the video without text, sends you the review link and
         serves the review page until you've approved or skipped it (or the deadline passes). In auto mode it
         goes all the way to "approved" on its own.
@@ -42,6 +42,10 @@ def cmd_run(a: argparse.Namespace, pipe: Pipeline) -> int:
         print(run.error)
         return 1
     print(f"Run {run.id}: {run.idea.get('who')} — {run.idea.get('song')}")
+    if a.part:   # a part of the song you chose, e.g. 83.5-105 (seconds)
+        start, _, end = a.part.partition("-")
+        run.section = [float(start), float(end)]
+        pipe.save(run)
     if pipe.cfg.publish_mode == "auto":
         run = pipe.run_auto(run)
         print(f"Run {run.id}: {run.state}" + (f" ({run.error})" if run.error else ""))
@@ -93,6 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="command", required=True)
     r = sub.add_parser("run", help="make today's video")
     r.add_argument("--idea", help="use this idea, e.g. 'Donald Trump — Fireflies'")
+    r.add_argument("--part", help="the part of the song to use, in seconds, e.g. 83.5-105 (default: the chorus)")
     r.add_argument("--date", help="pretend it's this date (YYYY-MM-DD), e.g. to test themes")
     r.add_argument("--no-serve", action="store_true", help="don't start the review page")
     r.set_defaults(func=cmd_run)

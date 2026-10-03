@@ -33,11 +33,13 @@ from .db import DB
 WAITING = {"built", "text_drafted", "final"}          # states where the run waits for you
 FINISHED = {"approved", "skipped", "expired", "failed"}
 ACTIONS = {
-    "built": {"continue", "regenerate_video", "regenerate_idea", "skip"},
-    "text_drafted": {"save_text", "apply_text", "regenerate_text", "regenerate_video", "regenerate_idea", "skip"},
+    "built": {"continue", "regenerate_video", "regenerate_idea", "change_section", "skip"},
+    "text_drafted": {"save_text", "apply_text", "regenerate_text", "regenerate_video", "regenerate_idea",
+                     "change_section", "skip"},
     "final": {"approve", "back_to_text", "save_text", "apply_text", "regenerate_text", "regenerate_video",
-              "regenerate_idea", "skip"},
+              "regenerate_idea", "change_section", "skip"},
 }
+MIN_PART, MAX_PART = 5.0, 60.0           # seconds of song a video may use
 MAX_IDEA_TRIES = 5
 
 
@@ -56,6 +58,9 @@ class Run:
     plan: dict = field(default_factory=dict)
     tried_ideas: list[str] = field(default_factory=list)
     seed: int = 0
+    section: list[float] | None = None   # the part of the song you chose (None: the chorus found automatically)
+    parts: list[dict] = field(default_factory=list)   # suggested parts of the song: start, end, repeats
+    song_length: float = 0.0
     themes: list[dict] = field(default_factory=list)
     outro: str = ""
     draft: dict = field(default_factory=dict)
@@ -155,8 +160,9 @@ class Pipeline:
         self.save(run)
         return run
 
-    def build(self, run: Run, new_idea: bool = False) -> Run:
-        """Make the video without text; on a problem, move on to another idea (up to MAX_IDEA_TRIES)."""
+    def build(self, run: Run, new_idea: bool = False, keep_idea: bool = False) -> Run:
+        """Make the video without text; on a problem, move on to another idea (up to MAX_IDEA_TRIES).
+        keep_idea: raise CannotBuild instead of moving on (e.g. when you chose the song part yourself)."""
         names = [t["name"] for t in run.themes]
         run.outro = outro_mod.pick(self.cfg.data / "outros", names, date.fromisoformat(run.day))
         for _ in range(MAX_IDEA_TRIES):
@@ -167,6 +173,7 @@ class Pipeline:
                 if picked is None:
                     break
                 run.idea, run.seed, new_idea = asdict(picked), 0, False
+                run.section, run.parts = None, []
                 self._note(run, f"Picked {picked.label}")
             idea = ideas_mod.Idea(**run.idea)
             try:
@@ -174,9 +181,17 @@ class Pipeline:
                 self.save(run)
                 plan = build_mod.plan_for(self.cfg, idea, self.db.blocked_channels())
                 plan.seed = run.seed or None
+                if run.section:
+                    plan.start, plan.end = run.section
+                if not run.parts:
+                    parts, run.song_length = build_mod.library(self.cfg).parts(Path(plan.song_path),
+                                                                               self.cfg.video["seconds"])
+                    run.parts = [asdict(x) for x in parts]
                 out = build_mod.build(self.cfg, plan, self.dir(run), run.outro, self._progress(run))
             except build_mod.CannotBuild as e:
                 self._note(run, f"Can't build {idea.label}: {e}")
+                if keep_idea:
+                    raise
                 new_idea = True
                 continue
             run.plan, run.report = asdict(plan), out["report"]
@@ -193,6 +208,48 @@ class Pipeline:
         run.error = "Couldn't build any idea: " + (run.log[-1] if run.log else "")
         self.db.record(run.id, run.day, run.idea.get("id"), None, None, "failed")
         self.save(run)
+        return run
+
+    def check_section(self, run: Run, start: float, end: float) -> str:
+        """Why a part of the song can't be used ("" if it can)."""
+        length = run.song_length or float("inf")
+        if not 0 <= start < end <= length + 0.01:
+            return f"Pick a part between 0 and {length:.0f} seconds, with the start before the end."
+        if not MIN_PART <= end - start <= MAX_PART:
+            return f"A part should be {MIN_PART:.0f} to {MAX_PART:.0f} seconds long."
+        return ""
+
+    def change_section(self, run: Run, start: float, end: float, remember: bool = False) -> Run:
+        """Rebuild the video from another part of the song (and, with `remember`, use it for this song from now)."""
+        start, end = round(float(start), 2), round(float(end), 2)
+        problem = self.check_section(run, start, end)
+        if problem:
+            raise InvalidAction(problem)
+        before = run.section
+        run.section = [start, end]
+        self._note(run, f"Song part {start:.1f}–{end:.1f} s")
+        try:
+            self.build(run, keep_idea=True)
+        except build_mod.CannotBuild as e:
+            run.section, run.busy = before, ""
+            self.save(run)
+            raise InvalidAction(f"That part of the song doesn't work with these clips: {e}") from None
+        if remember and run.plan:
+            build_mod.library(self.cfg).remember(run.plan["song"], Path(run.plan["song_path"]), start, end)
+            self._note(run, "Remembered as this song's part")
+            self.save(run)
+        return run
+
+    def ensure_parts(self, run: Run) -> Run:
+        """Fill in the song's suggested parts for a run built before they were stored."""
+        if run.plan and not run.parts and not run.busy:
+            try:
+                parts, run.song_length = build_mod.library(self.cfg).parts(Path(run.plan["song_path"]),
+                                                                           self.cfg.video["seconds"])
+                run.parts = [asdict(x) for x in parts]
+                self.save(run)
+            except Exception as e:  # noqa: BLE001 - the chooser just stays hidden
+                self._note(run, f"Couldn't list the song's parts: {e}")
         return run
 
     def _context(self, run: Run) -> dict:
@@ -297,6 +354,8 @@ class Pipeline:
                 return self.build(run)
             if action == "regenerate_idea":
                 return self.build(run, new_idea=True)
+            if action == "change_section":
+                return self.change_section(run, kw["start"], kw["end"], bool(kw.get("remember")))
             if action == "regenerate_text":
                 return self.draft_text(run, kw.get("note", ""))
             if action == "save_text":

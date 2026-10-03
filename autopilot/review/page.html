@@ -46,6 +46,10 @@ input.num { width: 64px; }
 .small { font-size: 13px; }
 img.preview { width: 100%; max-width: 360px; border-radius: 10px; display: block; margin-top: 8px; }
 details { margin-top: 8px; }
+input[type="checkbox"] { width: auto; }
+.part { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; }
+.part summary { cursor: pointer; font-weight: 600; }
+.part label { display: inline-flex; align-items: center; gap: 6px; }
 @media (max-width: 520px) {
   tr.ov { display: grid; grid-template-columns: 1fr 64px 64px 36px; gap: 4px; margin-bottom: 8px; }
   tr.ov td.style { grid-column: 1 / -1; }
@@ -81,6 +85,18 @@ details { margin-top: 8px; }
       <button data-a="regenerate_video">Different clips</button>
       <button data-a="skip">Skip today</button>
     </div>
+    <details class="part" id="partbox" hidden>
+      <summary>🎵 Use a different part of the song</summary>
+      <div class="small muted" id="partnow"></div>
+      <div class="row"><select id="partpick"></select></div>
+      <div class="row">
+        <label>From <input id="pstart" class="num" inputmode="decimal"> s</label>
+        <label>to <input id="pend" class="num" inputmode="decimal"> s</label>
+      </div>
+      <div class="row small"><label><input type="checkbox" id="premember"> Use this part for this song from now on</label></div>
+      <div class="row"><button id="partgo">Make the video from this part</button></div>
+      <div class="small muted">The video is made again from that part (a few minutes); the text is written again after.</div>
+    </details>
   </div>
 
   <div class="card" id="textcard" hidden>
@@ -112,7 +128,7 @@ details { margin-top: 8px; }
 <script>
 const RUN = "__RUN__", TOKEN = "__TOKEN__";
 const api = (p) => `/api/run/${RUN}${p}${p.includes("?") ? "&" : "?"}token=${encodeURIComponent(TOKEN)}`;
-let S = null, shownVersion = "", rowsFor = "", pollTimer = null;
+let S = null, shownVersion = "", rowsFor = "", partsFor = "", pollTimer = null;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 
@@ -148,6 +164,21 @@ function render(s) {
   if (src && src !== shownVersion) { $("video").src = src; shownVersion = src; }
   $("videonote").textContent = showFinal ? "The final video, with the text." : "The video without text.";
   $("step1").hidden = !(s.state === "built" && !s.busy);
+  $("partbox").hidden = !s.actions.includes("change_section");
+  if (s.section && s.section[0] != null) {
+    $("partnow").textContent = `Now using ${s.section[0]}–${s.section[1]} s of the song` +
+      (s.song_length ? ` (${Math.round(s.song_length)} s long).` : ".");
+  }
+  const pkey = JSON.stringify(s.parts);
+  if (pkey !== partsFor) {
+    partsFor = pkey;
+    $("partpick").innerHTML = s.parts.map((p, i) =>
+      `<option value="${i}">${esc(p.label)} · ${p.start}–${p.end} s</option>`).join("") +
+      `<option value="own">My own start and end…</option>`;
+    const now = s.parts.findIndex((p) => s.section && Math.abs(p.start - s.section[0]) < 0.5);
+    $("partpick").value = now >= 0 ? String((now + 1) % s.parts.length) : "0";   // suggest the next part
+    pickPart();
+  }
   $("step3").hidden = !(s.state === "final" && !s.busy);
 
   $("textcard").hidden = !["text_drafted"].includes(s.state);
@@ -175,6 +206,14 @@ function render(s) {
 
   clearTimeout(pollTimer);
   if (s.busy) pollTimer = setTimeout(load, 1500);
+}
+
+function pickPart() {
+  const v = $("partpick").value;
+  if (v === "own" || !S) return;
+  const p = S.parts[+v];
+  $("pstart").value = p.start;
+  $("pend").value = p.end;
 }
 
 function drawRows(ovs) {
@@ -220,6 +259,10 @@ $("addrow").onclick = () => {
   addRow({style: "caption", text: "", start: t, end: Math.round((t + 3) * 10) / 10});
 };
 $("apply").onclick = () => act("apply_text", {overlays: readRows()});
+$("partpick").onchange = pickPart;
+$("partgo").onclick = () => act("change_section", {start: parseFloat($("pstart").value),
+                                                   end: parseFloat($("pend").value),
+                                                   remember: $("premember").checked});
 $("rewrite").onclick = () => act("regenerate_text", {note: $("note").value});
 $("preview").onclick = async () => {
   await fetch(api("/action"), {method: "POST", headers: {"Content-Type": "application/json"},

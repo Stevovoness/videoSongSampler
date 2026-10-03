@@ -45,7 +45,7 @@ def create_app(pipe: Pipeline, background: bool = True) -> FastAPI:
             raise HTTPException(404, "No such run") from None
         if not token or not secrets.compare_digest(token, run.token):
             raise HTTPException(403, "Wrong or missing token")
-        return pipe.expire_if_due(run)
+        return pipe.ensure_parts(pipe.expire_if_due(run))
 
     def view(run: Run) -> dict:
         d = pipe.dir(run)
@@ -53,6 +53,8 @@ def create_app(pipe: Pipeline, background: bool = True) -> FastAPI:
             "id": run.id, "state": run.state, "busy": run.busy, "progress": run.progress, "error": run.error,
             "idea": run.idea, "plan": {k: run.plan.get(k) for k in ("who", "song", "artist", "start", "end", "tier")},
             "themes": [t["name"] for t in run.themes], "coverage": run.report.get("coverage"),
+            "parts": [{**pt, "label": part_label(i, pt)} for i, pt in enumerate(run.parts)],
+            "song_length": run.song_length, "section": [run.plan.get("start"), run.plan.get("end")],
             "overlays": run.overlays, "draft": run.draft, "judge": run.judge, "actions": run.actions,
             "videos": {name.split(".")[0]: f"/media/{run.id}/{name}?token={run.token}&v={run.version}"
                        for name in VIDEOS if (d / name).exists()},
@@ -72,7 +74,14 @@ def create_app(pipe: Pipeline, background: bool = True) -> FastAPI:
     def action(run_id: str, token: str = Query(""), body: dict = Body(...)):
         run = run_for(run_id, token)
         name = body.get("action", "")
-        kw = {k: body[k] for k in ("overlays", "note") if k in body}
+        kw = {k: body[k] for k in ("overlays", "note", "start", "end", "remember") if k in body}
+        if name == "change_section":
+            try:
+                problem = pipe.check_section(run, float(kw.get("start")), float(kw.get("end")))
+            except (TypeError, ValueError):
+                problem = "Give the start and end of the part in seconds."
+            if problem:
+                raise HTTPException(400, problem)
         lock = locks.setdefault(run_id, threading.Lock())
         if not lock.acquire(blocking=False):
             raise HTTPException(409, "Still working on the last request")
@@ -126,6 +135,16 @@ def create_app(pipe: Pipeline, background: bool = True) -> FastAPI:
         return FileResponse(f, media_type="video/mp4", headers={"Cache-Control": "no-store"})
 
     return app
+
+
+def part_label(i: int, part: dict) -> str:
+    """How a suggested song part is described on the page."""
+    if i == 0 and part.get("repeats", 0) >= 2:
+        return "The chorus (the most repeated part)"
+    if part.get("start", 0) < 1:
+        return "The start of the song"
+    n = part.get("repeats", 0)
+    return f"A part that comes back {n} times" if n >= 2 else "A part that plays once"
 
 
 def link(pipe: Pipeline, run: Run) -> str:
