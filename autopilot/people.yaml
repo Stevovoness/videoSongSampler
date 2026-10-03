@@ -1,0 +1,31 @@
+# Who can sing: where their footage comes from. Paths/globs are relative to the project folder.
+# tier 1 = public domain / licensed footage; tier 2 = fair-use footage (only used if config footage_tiers has 2).
+# youtube_channels: channel IDs searched (with the YouTube Data API) for their long speeches.
+
+- name: Donald Trump
+  aliases: [Trump, President Trump]
+  tier: 1
+  kind: politician
+  footage: ["projects/AutoTest/*Trump*.mp4", "projects/AutoTest/*Marine*.mp4"]
+  youtube_channels: [UCYxRlFDqcWM4y7FfpiAN3KQ]   # The White House (check the ID before relying on it)
+  search: "President Trump remarks"
+
+- name: The U.S. Congress
+  aliases: [Congress, US Congress]
+  tier: 1
+  kind: group
+  footage: []
+  youtube_channels: []
+  search: "House floor proceedings"
+
+- name: Vladimir Putin
+  aliases: [Putin]
+  tier: 1                                      # kremlin.ru videos are CC BY 4.0: credit in the description
+  kind: politician
+  footage: []
+  credit: "Video: kremlin.ru (CC BY 4.0)"
+
+- name: Gordon Ramsay
+  tier: 2
+  kind: celebrity
+  footage: []

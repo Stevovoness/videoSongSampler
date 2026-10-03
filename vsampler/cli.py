@@ -2,6 +2,7 @@
 
     python main.py analyse speech.mp4
     python main.py auto --videos speech.mp4 --song tune.mid --preset shorts --start 30 --end 60 --out short.mp4
+    python main.py text --video plain.mp4 --overlays text.json --out final.mp4   (add text, no re-render)
     python main.py render my_song.vsproj out.mp4        (or the older form: --render my_song.vsproj out.mp4)
 
 Progress goes to stderr (and to <out>.log); the result is printed to stdout as JSON.
@@ -148,6 +149,22 @@ def cmd_render(a: argparse.Namespace) -> int:
         log.close()
 
 
+def cmd_text(a: argparse.Namespace) -> int:
+    from .render.burn import burn_overlays
+
+    log = _Log(a.out + ".log")
+    try:
+        burn_overlays(a.video, _load_overlays(a.overlays), a.out, progress=log.progress())
+        log.say(f"OK {a.out}")
+        _emit({"video": a.out})
+        return EXIT_OK
+    except Exception:  # noqa: BLE001
+        log.say("FAILED\n" + traceback.format_exc())
+        return EXIT_FAILED
+    finally:
+        log.close()
+
+
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="vsampler", description="Video Sampler without its window.")
     sub = p.add_subparsers(dest="command", required=True)
@@ -181,6 +198,12 @@ def parser() -> argparse.ArgumentParser:
     au.add_argument("--no-render", action="store_true", help="only build the project and the report")
     au.set_defaults(func=cmd_auto)
 
+    tx = sub.add_parser("text", help="put text on a finished video without rendering it again")
+    tx.add_argument("--video", required=True, help="the video without text")
+    tx.add_argument("--overlays", required=True, help="JSON file with the text to show")
+    tx.add_argument("--out", required=True)
+    tx.set_defaults(func=cmd_text)
+
     r = sub.add_parser("render", help="render a saved project")
     r.add_argument("project")
     r.add_argument("out")
@@ -188,7 +211,7 @@ def parser() -> argparse.ArgumentParser:
     return p
 
 
-COMMANDS = {"analyse", "analyze", "auto", "render", "--render", "-h", "--help"}
+COMMANDS = {"analyse", "analyze", "auto", "text", "render", "--render", "-h", "--help"}
 
 
 def main(argv: list[str] | None = None) -> int:

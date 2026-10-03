@@ -1,0 +1,41 @@
+# Autopilot settings. Copy this file to autopilot/config.yaml (git ignores it) and change what you need;
+# anything missing there comes from here. Paths are relative to the project folder.
+# Secrets are never stored here: they are environment variables (see docs/autopilot.md).
+
+publish_mode: approval        # approval: you review every video | auto: no review, the AI judge must pass
+data_dir: autopilot_data      # runs, the database, ideas.yaml, outros
+work_dir: ""                  # long-video pieces and saved analyses ("" = <data_dir>/work)
+ideas_file: "projects/Project combination ideas.txt"
+song_dirs: [songs, projects]  # where song files (.mid / .mxl / .musicxml) are looked for
+people_file: autopilot/people.yaml
+seasons_file: autopilot/seasons.yaml
+
+min_coverage: 0.7             # don't use a build whose clips play less of the song than this
+person_cooldown_days: 5       # don't use the same person again within this many days
+footage_tiers: [1]            # 1 = public domain / licensed; add 2 to allow fair-use footage (see docs)
+tier2_max_fragment: 1.0       # tier 2 guard: every clip at most this many seconds
+
+video:
+  seconds: 22                 # length of the song part (the chorus is found automatically)
+  layout: dynamic             # dynamic ("only who's singing") or grid
+
+transcribe: true              # transcripts of the source speeches give the writer context (faster-whisper)
+whisper_model: base
+
+claude:
+  model: claude-opus-5-5
+  effort: medium
+
+review:
+  host: 127.0.0.1
+  port: 8765
+  public_url: ""              # e.g. https://review.example.com when it runs on a server
+  deadline_minutes: 240       # an unanswered review is skipped after this
+
+links:
+  handle: "@yourchannel"
+  order_page: ""
+
+cta:
+  default: "ok now imagine your nan doing this. I'll make you one 👇"
+  soft: "link in bio 👀"      # used on celebrity / tier 2 videos (no likeness in an advert)

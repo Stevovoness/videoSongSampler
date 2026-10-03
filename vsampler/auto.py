@@ -6,6 +6,7 @@ the clips cover, so a pipeline can reject a poor build before spending time rend
 """
 from __future__ import annotations
 
+import random
 import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -32,6 +33,7 @@ class AutoOptions:
     drums: bool = True               # put percussive hits on drum pads when the song has drums
     max_shift: int = 5               # furthest a clip may be pitch-shifted to fill a missing note
     transpose: int | None = None     # None: choose automatically
+    seed: int | None = None          # another seed picks other good takes (a different-looking video)
     voice: bool = True               # sources are speech: listen over the speaking-voice range (much faster)
     workers: int = 0                 # processes for pitch tracking (0: one per CPU core)
     work_dir: str = ""               # where long videos' pieces and saved analyses go ("" : the app's cache)
@@ -104,7 +106,12 @@ def build_slots(found: list[tuple[str, clipfinder.Candidate]], opts: AutoOptions
         return c.start, end
 
     def slot_from(group: list[tuple[str, clipfinder.Candidate]], pitched: bool) -> ClipSlot:
-        group = sorted(group, key=lambda pc: -pc[1].confidence)[: max(1, opts.max_takes)]
+        group = sorted(group, key=lambda pc: -pc[1].confidence)
+        if opts.seed is not None:   # shuffle among the good takes (twice as many as are kept)
+            top = group[: max(2, 2 * opts.max_takes)]
+            random.Random(f"{opts.seed}|{group[0][1].start}").shuffle(top)
+            group = top + group[len(top):]
+        group = group[: max(1, opts.max_takes)]
         takes = [Take(p, *cut(c), c.midi if pitched else None, c.loudness_db) for p, c in group]
         t0 = takes[0]
         return ClipSlot(t0.path, t0.trim_start, t0.trim_end, t0.detected_midi, autotune=pitched,

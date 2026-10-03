@@ -9,6 +9,7 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 
+import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
@@ -193,6 +194,36 @@ def blend(img: np.ndarray, rgba: np.ndarray, x: int, y: int, alpha: float = 1.0)
     roi[:] = (roi * (1 - a) + part[..., 2::-1] * a).astype(np.uint8)
 
 
+@dataclass
+class _Ready:
+    """A text block ready to blend quickly: BGR picture plus per-pixel weights (computed once per block)."""
+    bgr: np.ndarray
+    w: np.ndarray        # float32 0..1, the block's opacity
+    inv: np.ndarray      # 1 - w
+
+    @classmethod
+    def of(cls, rgba: np.ndarray) -> "_Ready":
+        w = np.ascontiguousarray(rgba[..., 3], dtype=np.float32) / 255.0
+        return cls(np.ascontiguousarray(rgba[..., 2::-1]), w, 1.0 - w)
+
+
+def _blend_ready(img: np.ndarray, r: _Ready, x: int, y: int, alpha: float = 1.0) -> None:
+    """Like `blend`, using OpenCV's per-pixel blend (several times faster than numpy for every frame)."""
+    H, W = img.shape[:2]
+    h, w = r.bgr.shape[:2]
+    x0, y0, x1, y1 = max(0, x), max(0, y), min(W, x + w), min(H, y + h)
+    if x1 <= x0 or y1 <= y0:
+        return
+    sl = (slice(y0 - y, y1 - y), slice(x0 - x, x1 - x))
+    fg = np.ascontiguousarray(r.bgr[sl])
+    wa, wi = r.w[sl], r.inv[sl]
+    if alpha < 1.0:
+        wa = wa * alpha
+        wi = 1.0 - wa
+    roi = np.ascontiguousarray(img[y0:y1, x0:x1])
+    img[y0:y1, x0:x1] = cv2.blendLinear(roi, fg, np.ascontiguousarray(wi), np.ascontiguousarray(wa))
+
+
 class OverlayPainter:
     """Draws a project's text overlays onto finished frames."""
 
@@ -207,6 +238,7 @@ class OverlayPainter:
             if end > start:
                 self.items.append((start, end, o))
         self._blocks: dict[tuple[str, str, int, int], np.ndarray] = {}
+        self._ready: dict[tuple[str, str, int, int], _Ready] = {}
 
     def _block(self, text: str, style_name: str, w: int) -> np.ndarray:
         key = (text, style_name, w, self.s.width)
@@ -216,12 +248,13 @@ class OverlayPainter:
             self._blocks[key] = render_block(text, style, w, max(10, int(style.size * self.s.width)), box)
         return self._blocks[key]
 
-    def apply(self, img: np.ndarray, t: float) -> np.ndarray:
+    def apply(self, img: np.ndarray, t: float, copy: bool = True) -> np.ndarray:
         """The frame with every overlay showing at time t (a new array if anything was drawn)."""
         showing = [(s, o) for s, e, o in self.items if s <= t < e]
         if not showing:
             return img
-        img = img.copy()   # frames can be cached and reused by the compositor
+        if copy:   # frames can be cached and reused by the compositor
+            img = img.copy()
         H, W = img.shape[:2]
         x0, y0, x1, y1 = safe_area(W, H)
         for start, o in showing:
@@ -230,6 +263,9 @@ class OverlayPainter:
                 name = "hook_small"
             style = STYLES.get(name, STYLES["caption"])
             block = self._block(o.text, name, x1 - x0)
+            rkey = (o.text, name, x1 - x0, self.s.width)
+            if rkey not in self._ready:
+                self._ready[rkey] = _Ready.of(block)
             h, w = block.shape[:2]
             where = o.position or style.position
             if where == "top":
@@ -241,5 +277,5 @@ class OverlayPainter:
             else:   # lower
                 y = int(y0 + 0.72 * (y1 - y0) - h / 2)
             x = x0 if style.align == "left" else (x0 + x1 - w) // 2
-            blend(img, block, x, y, min(1.0, (t - start) / FADE) if FADE else 1.0)
+            _blend_ready(img, self._ready[rkey], x, y, min(1.0, (t - start) / FADE) if FADE else 1.0)
         return img

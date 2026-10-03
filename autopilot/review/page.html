@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video review</title>
+<style>
+:root {
+  --bg: #f6f6f4; --card: #ffffff; --text: #1d1d1f; --muted: #6b6b70; --line: #e2e2e0;
+  --accent: #2f6fde; --accent-text: #ffffff; --good: #1f8a4c; --warn: #b35c00; --bad: #c0362c;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141416; --card: #1e1e22; --text: #ececee; --muted: #9a9aa2; --line: #333338;
+    --accent: #5b8ff0; --accent-text: #0b0b0c; --good: #45c27d; --warn: #f0a24a; --bad: #f06c62;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+       font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 760px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 20px; margin: 0 0 2px; }
+.muted { color: var(--muted); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin: 12px 0; }
+.steps { display: flex; gap: 6px; margin: 12px 0; }
+.steps span { flex: 1; text-align: center; padding: 6px 4px; border-radius: 8px; border: 1px solid var(--line);
+              font-size: 13px; color: var(--muted); }
+.steps span.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+.steps span.done { color: var(--good); }
+video { width: 100%; max-height: 70vh; background: #000; border-radius: 10px; display: block; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+button { font: inherit; padding: 9px 14px; border-radius: 9px; border: 1px solid var(--line);
+         background: var(--card); color: var(--text); cursor: pointer; }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+button:disabled { opacity: .5; cursor: default; }
+.busy { display: none; }
+.busy.on { display: block; }
+progress { width: 100%; height: 8px; }
+.error { color: var(--bad); white-space: pre-wrap; }
+.judge.ok { color: var(--good); } .judge.flag { color: var(--warn); }
+table { width: 100%; border-collapse: collapse; }
+td { padding: 4px 3px; vertical-align: top; }
+input, select, textarea { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+                          border-radius: 7px; padding: 6px; width: 100%; }
+input.num { width: 64px; }
+.small { font-size: 13px; }
+img.preview { width: 100%; max-width: 360px; border-radius: 10px; display: block; margin-top: 8px; }
+details { margin-top: 8px; }
+@media (max-width: 520px) {
+  tr.ov { display: grid; grid-template-columns: 1fr 64px 64px 36px; gap: 4px; margin-bottom: 8px; }
+  tr.ov td.style { grid-column: 1 / -1; }
+  tr.ov td.text { grid-column: 1 / -1; }
+  thead { display: none; }
+}
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">Today's video</h1>
+  <div class="muted small" id="sub"></div>
+  <div class="steps" id="steps">
+    <span data-s="built">1 · Preview</span><span data-s="text_drafted">2 · Text</span>
+    <span data-s="final">3 · Final</span><span data-s="approved">✓ Approved</span>
+  </div>
+
+  <div class="card busy" id="busy"><div id="busymsg">Working…</div><progress id="bar" max="1" value="0"></progress></div>
+  <div class="card error" id="error" hidden></div>
+
+  <div class="card" id="videocard" hidden>
+    <video id="video" controls playsinline preload="metadata"></video>
+    <div class="muted small" id="videonote"></div>
+    <div class="row" id="step1" hidden>
+      <button class="primary" data-a="continue">Looks good · write the text →</button>
+      <button data-a="regenerate_video">Different clips</button>
+      <button data-a="regenerate_idea">Different idea</button>
+      <button data-a="skip">Skip today</button>
+    </div>
+    <div class="row" id="step3" hidden>
+      <button class="primary" data-a="approve">Approve ✓</button>
+      <button data-a="back_to_text">← Edit the text</button>
+      <button data-a="regenerate_video">Different clips</button>
+      <button data-a="skip">Skip today</button>
+    </div>
+  </div>
+
+  <div class="card" id="textcard" hidden>
+    <div class="judge" id="judge"></div>
+    <table>
+      <thead><tr class="muted small"><td>Kind</td><td>Text</td><td>From (s)</td><td>To (s)</td><td></td></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="row">
+      <button id="addrow">+ Caption</button>
+      <button id="preview">Preview text at the video's current time</button>
+    </div>
+    <img class="preview" id="previewimg" alt="" hidden>
+    <div class="row">
+      <button class="primary" id="apply">Apply text →</button>
+    </div>
+    <div class="row">
+      <input id="note" placeholder="Note for a rewrite, e.g. 'more about the troops behind him'">
+      <button id="rewrite">Rewrite the text</button>
+      <button data-a="regenerate_video">Different clips</button>
+      <button data-a="skip">Skip today</button>
+    </div>
+    <details class="small"><summary>Title, description and hashtags</summary><div id="meta"></div></details>
+  </div>
+
+  <div class="card" id="donecard" hidden></div>
+  <details class="small muted"><summary>Log</summary><pre id="log"></pre></details>
+</main>
+<script>
+const RUN = "__RUN__", TOKEN = "__TOKEN__";
+const api = (p) => `/api/run/${RUN}${p}${p.includes("?") ? "&" : "?"}token=${encodeURIComponent(TOKEN)}`;
+let S = null, shownVersion = "", rowsFor = "", pollTimer = null;
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+
+async function load() {
+  const r = await fetch(api(""));
+  if (!r.ok) { $("error").hidden = false; $("error").textContent = await r.text(); return; }
+  render(await r.json());
+}
+
+function render(s) {
+  S = s;
+  const plan = s.plan || {}, idea = s.idea || {};
+  $("title").textContent = plan.who ? `${plan.who} sings ${plan.song}` : (idea.who ? `${idea.who} — ${idea.song}` : "Today's video");
+  const bits = [];
+  if (s.coverage != null) bits.push(`clips cover ${Math.round(s.coverage * 100)}% of the song`);
+  if (plan.start != null) bits.push(`song ${plan.start}–${plan.end} s`);
+  if (s.themes.length) bits.push(`theme: ${s.themes.join(", ")}`);
+  $("sub").textContent = bits.join(" · ");
+  const order = ["built", "text_drafted", "final", "approved"];
+  const at = order.indexOf(s.state);
+  document.querySelectorAll("#steps span").forEach((el, i) => {
+    el.className = i === at ? "on" : (at > i ? "done" : "");
+  });
+  $("busy").classList.toggle("on", !!s.busy);
+  $("busymsg").textContent = s.busy || "";
+  $("bar").value = s.progress || 0;
+  $("error").hidden = !s.error;
+  $("error").textContent = s.error ? `Something went wrong: ${s.error}` : "";
+
+  const showFinal = ["final", "approved"].includes(s.state) && s.videos.final;
+  const src = showFinal ? s.videos.final : s.videos.base;
+  $("videocard").hidden = !src;
+  if (src && src !== shownVersion) { $("video").src = src; shownVersion = src; }
+  $("videonote").textContent = showFinal ? "The final video, with the text." : "The video without text.";
+  $("step1").hidden = !(s.state === "built" && !s.busy);
+  $("step3").hidden = !(s.state === "final" && !s.busy);
+
+  $("textcard").hidden = !["text_drafted"].includes(s.state);
+  if (s.state === "text_drafted") {
+    const key = JSON.stringify(s.overlays) + s.state;
+    if (key !== rowsFor) { rowsFor = key; drawRows(s.overlays); }
+    const j = s.judge || {};
+    $("judge").className = "judge " + (j.ok ? "ok" : "flag");
+    $("judge").innerHTML = j.ok === undefined ? "" : (j.ok ? "✓ The checks found no problems." :
+      "⚠ Check these before applying:<ul>" + (j.reasons || []).map((r) => `<li>${esc(r)}</li>`).join("") + "</ul>");
+    const d = s.draft || {};
+    $("meta").innerHTML = `<p><b>${esc(d.title)}</b></p><p>${esc(d.description).replace(/\n/g, "<br>")}</p>
+      <p class="muted">${(d.hashtags || []).map((h) => "#" + esc(h)).join(" ")}</p>
+      <p class="muted">Written by: ${esc(d.source)}</p>`;
+  }
+  $("donecard").hidden = !["approved", "skipped", "expired", "failed"].includes(s.state);
+  $("donecard").textContent = {
+    approved: "Approved. The video and its title, description and hashtags are saved, ready to post.",
+    skipped: "Skipped for today.", expired: "Nobody reviewed it in time, so today was skipped.",
+    failed: "This run couldn't make a video. See the error and the log.",
+  }[s.state] || "";
+  document.querySelectorAll("button[data-a]").forEach((b) => b.disabled = !!s.busy || !s.actions.includes(b.dataset.a));
+  $("apply").disabled = $("rewrite").disabled = !!s.busy;
+  $("log").textContent = (s.log || []).join("\n");
+
+  clearTimeout(pollTimer);
+  if (s.busy) pollTimer = setTimeout(load, 1500);
+}
+
+function drawRows(ovs) {
+  $("rows").innerHTML = "";
+  ovs.forEach(addRow);
+}
+
+function addRow(o) {
+  const tr = document.createElement("tr");
+  tr.className = "ov";
+  const kinds = ["hook", "caption", "cta", "watermark"];
+  tr.innerHTML = `<td class="style"><select>${kinds.map((k) => `<option ${k === o.style ? "selected" : ""}>${k}</option>`).join("")}</select></td>
+    <td class="text"><input value="${esc(o.text)}"></td>
+    <td><input class="num" inputmode="decimal" value="${o.start ?? 0}" title="Seconds; negative counts back from the end"></td>
+    <td><input class="num" inputmode="decimal" value="${o.end ?? ""}" placeholder="end"></td>
+    <td><button title="Remove">✕</button></td>`;
+  tr.querySelector("button").onclick = () => tr.remove();
+  $("rows").appendChild(tr);
+}
+
+function readRows() {
+  return [...$("rows").querySelectorAll("tr")].map((tr) => {
+    const [style, text, start, end] = [...tr.querySelectorAll("select, input")].map((e) => e.value.trim());
+    return {style, text, start: parseFloat(start) || 0, end: end === "" ? null : parseFloat(end)};
+  }).filter((o) => o.text);
+}
+
+async function act(action, extra = {}) {
+  document.querySelectorAll("button").forEach((b) => b.disabled = true);
+  const r = await fetch(api("/action"), {method: "POST", headers: {"Content-Type": "application/json"},
+                                         body: JSON.stringify({action, ...extra})});
+  if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || "That didn't work."); }
+  else render(await r.json());
+  load();
+}
+
+document.querySelectorAll("button[data-a]").forEach((b) => b.onclick = () => {
+  if (b.dataset.a === "skip" && !confirm("Skip today's video?")) return;
+  act(b.dataset.a);
+});
+$("addrow").onclick = () => {
+  const t = Math.round(($("video").currentTime || 0) * 10) / 10;
+  addRow({style: "caption", text: "", start: t, end: Math.round((t + 3) * 10) / 10});
+};
+$("apply").onclick = () => act("apply_text", {overlays: readRows()});
+$("rewrite").onclick = () => act("regenerate_text", {note: $("note").value});
+$("preview").onclick = async () => {
+  await fetch(api("/action"), {method: "POST", headers: {"Content-Type": "application/json"},
+                               body: JSON.stringify({action: "save_text", overlays: readRows()})});
+  const t = $("video").currentTime || 0;
+  $("previewimg").src = api(`/frame?t=${t.toFixed(2)}`) + `&n=${Date.now()}`;
+  $("previewimg").hidden = false;
+  rowsFor = "";  // the saved text may have been cleaned up: redraw on the next refresh
+  load();
+};
+load();
+</script>
+</body>
+</html>

@@ -82,10 +82,17 @@ picture stays in sync with the sound.
   python main.py auto --videos speech.mp4 --song tune.mid --preset shorts --overlays text.json --out short.mp4
   python main.py render my_song.vsproj out.mp4
   ```
+  Add or change the text of a finished video without rendering it again:
+  `python main.py text --video plain.mp4 --overlays text.json --out final.mp4`.
   `auto` picks the clips, the takes and the key by itself, plays every part of the song (`--melody-only` for
   just the tune), and writes `short.vsproj` and `short.report.json`
   (how much of the song the clips cover, and where every clip came from). Run `python main.py auto --help` for
   every option. The same works on a Linux server: see `Dockerfile` and [docs/autopilot.md](docs/autopilot.md).
+
+### The automation (daily Shorts, with a review page)
+`python -m autopilot run` makes today's "<person> sings <song>" video from your ideas list and opens a review
+page: watch it without text, edit the text it wrote, check the final video, approve. Set-up and details:
+[docs/autopilot.md](docs/autopilot.md) (`pip install -r requirements-autopilot.txt` first).
 
 ## Download and run (Windows 10/11, 64-bit)
 
@@ -154,6 +161,7 @@ gh release create v<version> release\* --title "Video Sampler <version>" --notes
 | `vsampler/drums.py` | General MIDI drum names, the drum pad layout and drum families |
 | `vsampler/render/` | Collage layouts, frame compositor, text overlays, MP4 encoder (PyAV / x264 + AAC) |
 | `vsampler/auto.py`, `vsampler/cli.py` | Building a project with no one at the controls; the command line |
+| `autopilot/` | The daily automation and its review page (see `docs/autopilot.md`) |
 | `vsampler/gui/` | PySide6 interface (piano keyboard, drum pads, low-latency sample pad) |
 
 ## Licences

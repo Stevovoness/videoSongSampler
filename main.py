@@ -19,7 +19,7 @@ if sys.stdout is None or sys.stderr is None:
 
 def main() -> int:
     multiprocessing.freeze_support()
-    if len(sys.argv) > 1 and sys.argv[1] in ("analyse", "analyze", "auto", "render", "--render", "-h", "--help"):
+    if len(sys.argv) > 1 and sys.argv[1] in ("analyse", "analyze", "auto", "text", "render", "--render", "-h", "--help"):
         from vsampler.cli import main as cli_main   # command line, no window (see vsampler/cli.py)
         return cli_main(sys.argv[1:])
     os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")

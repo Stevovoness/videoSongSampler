@@ -10,8 +10,11 @@ how it's configured, and the rules it follows. Keep it up to date as the parts a
 | Engine: Shorts preset, text overlays, outro, song excerpt, length limit, loudness | **Built** (v1.4.0) |
 | Engine: automatic project builder (`vsampler/auto.py`) | **Built** (v1.4.0) |
 | Command line (`vsampler/cli.py`: `analyse`, `auto`, `render`) | **Built** (v1.4.0) |
-| Linux server image (`Dockerfile`, `requirements-server.txt`) | **Written, not yet test-built** |
-| `autopilot/` package (trends, seasons, footage, writer, outro, review, publish, stats) | Planned |
+| Linux server image (`Dockerfile`, `requirements-server.txt`, `requirements-autopilot.txt`) | **Written, not yet test-built** |
+| Adding text without re-rendering (`vsampler/render/burn.py`, `vsampler text`) | **Built** |
+| `autopilot/` phase 1: config, ideas, seasons, songs (chorus finding), people and local footage, build, context (transcripts, frames), writer and judge (Claude, template fallback), outro, run state machine, **review page**, notifications | **Built** |
+| YouTube search and download for footage (`footage.py`) | Written, untested (needs `YOUTUBE_API_KEY`) |
+| Trends, publishing to the platforms, stats | Planned |
 | Custom-order storefront and fulfilment | Planned |
 
 The detailed task list is [TODO.md](TODO.md). Sections describing planned parts are the design to build to. Update them, and this table, as each part lands.
@@ -51,6 +54,41 @@ Everything runs on one Linux server (Docker), started by a daily timer. The engi
 there exactly as it does on Windows.
 
 ## 2. The daily workflow
+**How to run it (phase 1):**
+```
+.venv\Scripts\pip install -r requirements-autopilot.txt     # once
+.venv\Scripts\python -m autopilot ideas                      # which ideas can be made, and what each is missing
+.venv\Scripts\python -m autopilot run                        # today's video; prints / sends the review link
+.venv\Scripts\python -m autopilot run --idea "Donald Trump — Fireflies" --date 2026-12-20
+.venv\Scripts\python -m autopilot review                     # serve the review page again for waiting runs
+.venv\Scripts\python -m autopilot status                     # the latest runs
+```
+`run` builds the video without text, sends the link (Telegram, email, or just the console) and serves the review
+page at `http://127.0.0.1:8765/run/<id>?token=…` until you approve or skip it, or the deadline passes. In
+`publish_mode: auto` it goes straight through to "approved". The approved video and its `metadata.json` (title,
+description, hashtags) are in `autopilot_data/runs/<id>/`, ready to post (publishing comes in a later phase).
+
+### The review (approval mode)
+| Step | You see | You can |
+|---|---|---|
+| 1 · Preview | The video **without text** | **Looks good, write the text** · **Different clips** (same idea, other takes) · **Different idea** · Skip |
+| 2 · Text | The text the writer drafted (hook, captions with times, call to action, watermark), the judge's checks, the title, description and hashtags | Edit, add or remove lines and their times · **Preview** the text on a still at the video's current time (instant) · **Rewrite the text** (with a note to the writer) · **Apply text** · Different clips · Skip |
+| 3 · Final | The video **with the text** | **Approve** · **Edit the text** (back to step 2; applying again only re-draws the text) · Different clips · Skip |
+
+Applying text never re-renders the song: `burn_overlays` draws the text on the text-free video and copies the
+sound across (`python main.py text --video base.mp4 --overlays text.json --out final.mp4` does the same by hand).
+
+### The run state machine (`autopilot/pipeline.py`)
+```
+picked -> built -> text_drafted -> final -> approved
+           ^  |        ^   |        |  |
+           |  +--------+   +--------+  |   (regenerate video / idea from any review step goes back to built;
+           +---------------------------+    skip, expiry and errors end the run)
+```
+Every change is saved to `runs/<id>/state.json`, so a restart picks the run up where it was. Slow steps run in a
+background thread and the page polls their progress.
+
+### The full design
 Each step either passes something to the next one, or ends the day's run cleanly with a logged reason and a
 phone alert. A skipped day is better than a bad post.
 
@@ -119,28 +157,31 @@ video, and a negative `start` counts back from the end:
 ]
 ```
 
-### `autopilot/` (planned)
-| Module | Job |
-|---|---|
-| `config.yaml` | All settings (§4). |
-| `seasons.yaml`, `seasons.py` | Theme calendar and today's active themes. |
-| `trends.py` | Today's stories and people, ranked and filtered. |
-| `songs.py`, `songs/` | Song library: MIDI files plus `songs.yaml` (title, status `trending` / `public_domain`, catchy section, mood, themes). |
-| `footage.py` | Search and download from allowed sources, recording provenance. |
-| `build.py` | Runs `vsampler auto` over candidates and keeps the best report. |
-| `context.py` | Transcript, keyframes and song section, giving the "what's on screen" timeline. |
-| `writer.py` | Claude API: overlays, titles, descriptions, hashtags; also drafts customer emails in your voice. |
-| `judge.py` | Claude API safety check (pass/fail plus reasons). |
-| `outro.py`, `outros/` | Your recorded sign-off clips plus `outros.yaml` (which theme each suits). |
-| `review.py` | Approval messages (Telegram bot or email) with Approve / Skip / Redo. |
-| `publish/` | `youtube.py`, `tiktok.py`, `instagram.py`, `facebook.py`: one interface, `upload(video, meta) -> post_id`. |
-| `stats.py` | Pulls performance numbers from each platform. |
-| `db.py` | SQLite: people, songs and footage used, posts, stats, claims per source channel. |
-| `run_daily.py` | Runs the steps in order, logs, retries and alerts. `--dry-run` does everything except publish. `--date` pretends it's another day (to test themes). |
-| `orders/` | The custom-video service (§5). |
+### `autopilot/`
+| Module | Job | State |
+|---|---|---|
+| `config.py`, `config.example.yaml` (+ your `config.yaml`, git-ignored) | All settings (§4). Secrets only from environment variables | Built |
+| `ideas.py` | Parses `Project combination ideas.txt` ("X singing “Song” — Artist", top-10 repeats become favourites) into `autopilot_data/ideas.yaml`; picks today's idea (can be made, not used, person not used recently, favourites and theme matches first) | Built |
+| `seasons.py`, `seasons.yaml` | Theme calendar (fixed dates, "second sunday of may", Easter-relative, US election) and today's active themes | Built |
+| `songs.py` | Finds a song's file by title in `song_dirs`; finds the chorus (the most repeated melodic phrase); saves both in `autopilot_data/songs.yaml` (edit it to override) | Built |
+| `footage.py`, `people.yaml` | Who can sing: tier, local footage globs, official channels. Local files first; YouTube search and download with `YOUTUBE_API_KEY` | Local built; YouTube untested |
+| `build.py` | Idea → plan (person, song file, chorus, footage) → `vsampler.auto` (with `seed` for "different clips") → coverage check → `base.mp4` without text | Built |
+| `context.py` | What happens in this render: phrases, the words each note was cut from (faster-whisper, only the 30 s blocks used, cached), what was said around them, frames, sources | Built |
+| `style.md`, `writer.py` | Claude (`claude-opus-5-5`, structured JSON output, server-side refusal fallback) writes the hook, captions, call to action, title, description and hashtags; one automatic retry if the checks fail. Without a key: template text to edit | Built (Claude path tested with a stand-in) |
+| `judge.py` | Fixed rule checks (lengths, timings, edit-bragging, claim words) plus a Claude review when a key is set | Built |
+| `outro.py` | Picks one of your sign-off clips from `autopilot_data/outros/outros.yaml` (seasonal first) | Built (waiting for your clips) |
+| `pipeline.py` | The run state machine above | Built |
+| `review/` | The review page (FastAPI + one HTML page) | Built |
+| `notify.py` | Telegram (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`), else email (`SMTP_HOST`, `NOTIFY_EMAIL`, …), else console | Built |
+| `db.py` | SQLite: history (cooldowns, used ideas), posts, claims per source channel | Built |
+| `__main__.py` | `python -m autopilot run / review / ideas / status` | Built |
+| `trends.py` | Today's stories and people, ranked and filtered | Planned |
+| `publish/` | `youtube.py`, `tiktok.py`, `instagram.py`, `facebook.py`: one interface, `upload(video, meta) -> post_id` | Planned |
+| `stats.py` | Performance numbers from each platform | Planned |
+| `orders/` | The custom-video service (§5) | Planned |
 
 ### How the text is written (planned)
-The text is written by an LLM: Claude (`claude-sonnet-5-5`) through the API, which also looks at images. A
+The text is written by an LLM: Claude (`claude-opus-5-5`, set in `config.yaml`) through the API, which also looks at images. A
 generic model writes generic captions, so its quality comes from the **context** it gets. `context.py` builds a
 "what's on screen" timeline for *this exact render*:
 
@@ -211,47 +252,31 @@ Then, for each entry:
 - **Using a celebrity's face to advertise the paid service** risks a right-of-publicity claim, separate from
   copyright. On celebrity videos, the call to action stays soft ("link in bio"), not "I'll make you one".
 
-## 4. Configuration (planned)
-`config.yaml`:
-```yaml
-publish_mode: approval          # approval | auto
-post_times: {youtube: "17:00", tiktok: "19:00", instagram: "18:00", facebook: "18:00"}   # local time
-platforms: {youtube: true, tiktok: true, instagram: true, facebook: true}
-timezone: Europe/London
-footage_tiers: [1]              # add 2 to allow fair-use news/creator footage (see §7)
-tier2_guards: {max_fragment: 1.0, max_continuous: 2.0}
-sources:
-  allow: [whitehouse, house_floor, senate_floor, govinfo, licensed_creators]
-  block: []                     # channels that have claimed a video are added here automatically
-min_coverage: 0.7
-person_cooldown_days: 5
-banned_topics: [mass-casualty events, deaths, children]
-review: {channel: telegram, deadline_minutes: 120}
-links: {order_page: "https://…", bio: "https://…"}
-claude: {model: claude-sonnet-5-5}
-```
+## 4. Configuration
+Every setting, with a comment, is in [`autopilot/config.example.yaml`](../autopilot/config.example.yaml). Put the
+ones you change in `autopilot/config.yaml` (git ignores it); the rest come from the example. The main ones:
+`publish_mode` (`approval` / `auto`), `min_coverage`, `person_cooldown_days`, `footage_tiers`,
+`video.seconds`, `claude.model` / `claude.effort`, `review.deadline_minutes`, `links.handle`, and the `cta` texts.
 
-`seasons.yaml`: each theme has a date window (or a rule, e.g. "2nd Sunday of May"), a lead time, a weight, a
-song pool, a tone for the writer and the CTA wording:
+Who can sing, and where their footage comes from, is in [`autopilot/people.yaml`](../autopilot/people.yaml).
+A song's catchy part is found automatically and saved in `autopilot_data/songs.yaml`; edit `start` / `end`
+there to choose another part.
+
+[`autopilot/seasons.yaml`](../autopilot/seasons.yaml): each theme has a date rule (`"12-25"`,
+`"second sunday of may"`, `"easter-21"` for UK Mother's Day, `"us-election"`), how many days before (and after)
+it's active, `words` that make an idea fit it, a `tone` for the writer and the `cta` wording:
 ```yaml
 - name: mothers_day_uk
-  date: "fourth Sunday of Lent"
-  lead_days: 21                  # start pushing three weeks before, when people order gifts
-  weight: 0.7                    # how strongly it steers the day's topic and song (0..1)
+  date: "easter-21"
+  lead_days: 21                  # start three weeks before, when people order gifts
   kind: family                   # family | political
-  songs: [you_are_my_sunshine, happy_birthday_style_pd]
-  tone: "warm, cheeky, about mums"
-  cta: "Get Mum singing this for Mother's Day 💐 link in bio"
-- name: state_of_the_union
-  date: "rule:sotu"              # looked up each year
-  lead_days: 2
-  weight: 0.9
-  kind: political
-  tone: "satirical, about the speech itself"
+  words: [mum, mother, love, sunshine]
+  tone: "warm and cheeky, about mums"
+  cta: "get Mum singing this for Mother's Day 💐 link in bio"
 ```
-Planned family themes: Valentine's, Mother's Day (UK and US), Father's Day, graduation, wedding season,
-Halloween, Thanksgiving, Christmas, New Year, plus birthdays and retirements as evergreen themes. Planned
-political themes: State of the Union, primaries, debates, Election Day, inauguration, budget and shutdown fights.
+Included: New Year, Valentine's, Mother's Day (UK and US), Father's Day, Independence Day, Halloween, the US
+election, Thanksgiving and Christmas. Still to add: graduation, weddings, State of the Union, primaries, debates,
+inauguration, budget fights.
 
 Secrets (API keys, OAuth refresh tokens, Stripe keys) never go in `config.yaml` or git. They live in environment
 variables or AWS Secrets Manager.

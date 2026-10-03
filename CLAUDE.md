@@ -55,6 +55,9 @@ fits together.
   in `gui/screen.scrollable()`, keep important buttons outside the scrolling part, and avoid big fixed minimum
   sizes. `ScreenGuard` (installed in `main.py`) is the safety net.
 - User-facing text is friendly and non-technical (the app is aimed at non-musicians).
+- `autopilot/` (the automation) uses the engine but never Qt. Secrets (API keys, tokens) only ever come from
+  environment variables, never from files in git. Its tests (`tests/test_autopilot.py`) never call the network:
+  use the `FakeClient` stand-in for Claude.
 - The engine must keep working headless on Linux (the automation server, `Dockerfile`). Don't add Windows-only
   calls to it, and add new engine dependencies to `requirements-server.txt` as well.
 - Save files (`.vsproj`) must stay backward compatible. `Project.from_json` ignores unknown fields and fills in

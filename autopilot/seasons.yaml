@@ -1,0 +1,86 @@
+# Theme calendar. Each theme is active from `lead_days` before its date until `after_days` after it.
+# date: "MM-DD", "<first|second|third|fourth|last> <weekday> of <month>", "easter-21" (days from Easter Sunday),
+#       or "us-election" (first Tuesday after the first Monday of November, even years).
+# words: words that make an idea or song fit the theme. tone and cta go to the writer.
+
+- name: new_year
+  date: "01-01"
+  lead_days: 4
+  after_days: 2
+  kind: family
+  words: [party, new, year, celebration, auld]
+  tone: "new year's resolutions energy"
+  cta: "start the year with your family singing this 🎆 link in bio"
+
+- name: valentines
+  date: "02-14"
+  lead_days: 18
+  kind: family
+  words: [love, heart, baby, call, maybe, kiss]
+  tone: "romantic, cringe, couples"
+  cta: "valentine's gift sorted: your partner singing this 💘 link in bio"
+
+- name: mothers_day_uk
+  date: "easter-21"
+  lead_days: 21
+  kind: family
+  words: [mum, mother, love, sunshine]
+  tone: "warm and cheeky, about mums"
+  cta: "get Mum singing this for Mother's Day 💐 link in bio"
+
+- name: mothers_day_us
+  date: "second sunday of may"
+  lead_days: 21
+  kind: family
+  words: [mom, mother, love]
+  tone: "warm and cheeky, about moms"
+  cta: "get Mom singing this for Mother's Day 💐 link in bio"
+
+- name: fathers_day
+  date: "third sunday of june"
+  lead_days: 21
+  kind: family
+  words: [dad, father, heart]
+  tone: "dad jokes"
+  cta: "Father's Day sorted: your dad singing this 👔 link in bio"
+
+- name: independence_day
+  date: "07-04"
+  lead_days: 10
+  after_days: 1
+  kind: political
+  words: [usa, u-s-a, america, party, freedom, congress, trump, biden]
+  tone: "gently mocking over-the-top patriotism: eagles, fireworks, FREEDOM"
+
+- name: halloween
+  date: "10-31"
+  lead_days: 14
+  kind: family
+  words: [thriller, ghost, monster, scary]
+  tone: "spooky"
+  cta: "your family as a haunted choir 👻 link in bio"
+
+- name: us_election
+  date: "us-election"
+  lead_days: 30
+  after_days: 7
+  kind: political
+  words: [trump, biden, congress, election, president, senate, vote]
+  tone: "election-season chaos; never election misinformation"
+
+- name: thanksgiving
+  date: "fourth thursday of november"
+  lead_days: 10
+  kind: family
+  words: [family, dinner, uncle, thanks]
+  tone: "the uncle at Thanksgiving dinner"
+  cta: "the family group chat needs this 🦃 link in bio"
+
+- name: christmas
+  date: "12-25"
+  lead_days: 30
+  after_days: 1
+  kind: family
+  words: [christmas, santa, jingle, bells, snow, king, royal]
+  tone: "festive chaos"
+  cta: "the Christmas present nobody saw coming 🎄 link in bio"

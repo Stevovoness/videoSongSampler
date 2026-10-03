@@ -4,6 +4,21 @@ Every change gets a line here (see the workflow in [CLAUDE.md](../CLAUDE.md)). N
 **Unreleased** until a version is released.
 
 ## Unreleased
+- **The automation, phase 1 (`autopilot/`).** `python -m autopilot run` picks an idea from your ideas list
+  (favourites and today's seasonal theme first), finds the song file and its chorus, builds the video without
+  text, and sends you a review link. On the **review page** you watch it (or ask for different clips or a
+  different idea), then get text written for it, edit and preview it, apply it (seconds, no re-render), check
+  the final video and approve it. The approved video and its title, description and hashtags are saved, ready
+  to post. `publish_mode: auto` does it all without stopping. Also: `python -m autopilot ideas / review / status`.
+  - The text is written by Claude from the video's context (the words each note was cut from, what was said
+    around them, frames, the song's high note, the theme), in the voice in `autopilot/style.md`, with a rule
+    check and an AI judge. Without an API key, template text is used, ready to edit.
+  - See `docs/autopilot.md` for the whole flow and every setting.
+- **Add text without re-rendering:** `python main.py text --video base.mp4 --overlays text.json --out final.mp4`
+  (`vsampler/render/burn.py`). The sound is copied untouched.
+- Text overlays are drawn ~4x faster (OpenCV blending, each block prepared once), which also speeds up renders.
+- `auto` has a `seed` option: another seed picks other good takes, for a different-looking video.
+- `requirements-autopilot.txt`; the Dockerfile includes the automation.
 - `docs/autopilot.md`: how the text is written (Claude with a per-render context timeline) and how songs and
   footage will be found automatically (ideas queue, song finder, people and sources, face and speaker matching).
 - **The clip finder is several times faster in the app too.** It uses every CPU core, a coarser pitch search

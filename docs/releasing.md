@@ -33,7 +33,8 @@ The automation server doesn't use the Windows build. It runs the engine from a D
 docker build -t vsampler .
 docker run --rm --entrypoint python vsampler -m pytest tests -q      # check it inside the image
 ```
-`requirements-server.txt` lists the engine's packages without PySide6 or PyInstaller. Keep it in step with
+`requirements-server.txt` lists the engine's packages without PySide6 or PyInstaller, and
+`requirements-autopilot.txt` the automation's (Claude SDK, FastAPI, faster-whisper…); the image installs both. Keep it in step with
 `requirements.txt` when a dependency is added. See [autopilot.md](autopilot.md) for how the server uses it.
 
 ## Updating an installed copy

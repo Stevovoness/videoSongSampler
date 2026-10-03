@@ -17,3 +17,8 @@ release/
 
 # your own projects, test footage and song files (private, often large)
 projects/
+
+# autopilot: its data (runs, database, footage) and your own settings
+autopilot_data/
+autopilot/config.yaml
+*.db

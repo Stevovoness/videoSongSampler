@@ -110,7 +110,9 @@ The GUI (`vsampler/gui/`) edits a single `Project` held by `AppState`. It listen
 | `vsampler/render/sources.py` | Cache of decoded clip audio and frames (`get_source`, `trimmed_audio`) |
 | `vsampler/render/renderer.py` | `prepare`, `mix_audio`, `render_video`, `render_audio_preview`, `render_slot_audio` |
 | `vsampler/render/compositor.py`, `layouts.py` | Grid / "only who's singing" frame building |
-| `vsampler/render/overlays.py` | Text overlays (`OverlayPainter`, `STYLES`, `safe_area`) |
+| `vsampler/render/overlays.py` | Text overlays (`OverlayPainter`, `STYLES`, `safe_area`; blending via `cv2.blendLinear`, each block prepared once) |
+| `vsampler/render/burn.py` | `burn_overlays`: text onto a finished video without re-rendering (decode + draw in a thread, x264 encode, sound packets copied) |
+| `autopilot/` | The automation built on the engine; documented in [autopilot.md](autopilot.md) |
 | `vsampler/gui/main_window.py` | Window, menus, project open / save, help text |
 | `vsampler/gui/clips_tab.py` | Step 1: Notes / Drums switch, keyboard and pads, computer-keyboard play, clip details and takes; long videos go to the clip finder |
 | `vsampler/gui/clip_finder.py` | The clip finder window: suggestions list, chips, selected-clip panel, adding clips as takes |

@@ -1,0 +1,9 @@
+# The autopilot package (python -m autopilot), on top of requirements.txt or requirements-server.txt.
+#   pip install -r requirements-autopilot.txt
+anthropic>=1.11        # the text writer and judge (Claude API)
+fastapi>=0.115         # the review page
+uvicorn[standard]>=0.30
+httpx>=0.27            # FastAPI's test client
+pyyaml>=6
+faster-whisper>=1.0    # transcripts of the source speeches (context for the writer)
+requests>=2.31
