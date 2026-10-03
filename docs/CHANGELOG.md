@@ -4,6 +4,8 @@ Every change gets a line here (see the workflow in [CLAUDE.md](../CLAUDE.md)). N
 **Unreleased** until a version is released.
 
 ## Unreleased
+- `docs/TODO.md`: a to-do list for the app and the automation, ticked off as work is done. `CLAUDE.md` and
+  `AGENTS.md` now require updating the docs and ticking off the list after every change.
 
 ## 1.4.0
 - **Shorts / Reels / TikTok format.** A `shorts` preset makes a vertical 1080×1920 video under a minute, in the

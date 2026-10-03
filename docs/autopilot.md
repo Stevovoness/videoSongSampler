@@ -14,7 +14,7 @@ how it's configured, and the rules it follows. Keep it up to date as the parts a
 | `autopilot/` package (trends, seasons, footage, writer, outro, review, publish, stats) | Planned |
 | Custom-order storefront and fulfilment | Planned |
 
-Sections describing planned parts are the design to build to. Update them, and this table, as each part lands.
+The detailed task list is [TODO.md](TODO.md). Sections describing planned parts are the design to build to. Update them, and this table, as each part lands.
 
 ---
 

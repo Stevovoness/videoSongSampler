@@ -4,7 +4,10 @@ Read this file before changing anything in the repository.
 
 ## Mandatory workflow: after EVERY change
 Every change (code, tests, build scripts, assets, installer, docs) must end with these steps, in order. Do not
-finish a task or hand back to the user until all of them are done.
+finish a task or hand back to the user until all of them are done. **Never skip the docs or the to-do list,
+however small the change.**
+
+0. **Before starting:** read `docs/TODO.md` to see where the work stands. If the task isn't on the list, add it.
 
 1. **Run the tests:** `.venv\Scripts\python -m pytest tests -q`. They must pass. Add or update tests for the
    behaviour you changed.
@@ -16,7 +19,9 @@ finish a task or hand back to the user until all of them are done.
    - `docs/autopilot.md`: when the command line, `auto.py`, overlays, the server image or the planned
      automation (`autopilot/`) change. Keep its **Status** table current.
    - This file: when the workflow or the project's conventions change.
-3. **Commit and push to git:**
+3. **Tick off the to-do list:** in `docs/TODO.md`, change `- [ ]` to `- [x]` for every item the change finished,
+   and add any new follow-up items you found. Do this in the same commit as the change.
+4. **Commit and push to git:**
    ```
    git add -A
    git commit -m "<short summary of the change>"
@@ -25,6 +30,8 @@ finish a task or hand back to the user until all of them are done.
    Use clear commit messages. Never commit build output (`build/`, `dist/`, `release/`, `installer/Output/`),
    `.venv/` or `tools/audiveris/`; `.gitignore` already excludes them. If a push is rejected, run
    `git pull --rebase origin main`, re-run the tests, and push again. Never force-push.
+
+Before handing back, check: tests pass ✔, docs and changelog updated ✔, `docs/TODO.md` ticked ✔, pushed ✔.
 
 ## Project at a glance
 A Windows desktop app (Python 3.11, PySide6) that turns short video clips of single notes and percussive sounds

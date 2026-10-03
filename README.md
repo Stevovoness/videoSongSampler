@@ -129,9 +129,10 @@ gh release create v<version> release\* --title "Video Sampler <version>" --notes
 - [docs/architecture.md](docs/architecture.md): how the code fits together
 - [docs/releasing.md](docs/releasing.md): building and publishing a release
 - [docs/CHANGELOG.md](docs/CHANGELOG.md): what changed in each version
+- [docs/TODO.md](docs/TODO.md): the to-do list, ticked off as work is done
 - [docs/autopilot.md](docs/autopilot.md): the daily Shorts automation and custom-video service (design and status)
 - [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md): rules for AI agents. **After every change: run the tests,
-  update the docs and changelog, then commit and push to git.**
+  update the docs and changelog, tick off `docs/TODO.md`, then commit and push to git.**
 
 ## Tests
 ```
