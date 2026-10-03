@@ -323,3 +323,42 @@ def test_review_can_use_another_part_of_the_song(project_dir, monkeypatch):
     # a new run of the same song now uses the remembered part
     again = pipe.build(pipe.new_run(date(2026, 10, 4), idea="Test Person — Test Tune"))
     assert (again.plan["start"], again.plan["end"]) == (6.0, 11.0)
+
+
+def _wait(web, url, q, seconds=300):
+    import time
+    end = time.time() + seconds
+    while time.time() < end:
+        s = web.get(url, params=q).json()
+        if not s["busy"]:
+            return s
+        time.sleep(0.5)
+    raise AssertionError("the job never finished")
+
+
+def test_background_jobs_run_and_show_progress(project_dir, monkeypatch):
+    """The real server mode: slow actions run in a thread while the page shows what's happening."""
+    from fastapi.testclient import TestClient
+
+    from autopilot.pipeline import Pipeline
+    from autopilot.review.app import create_app
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    pipe = Pipeline(make_cfg(project_dir, "data6"))
+    run = pipe.build(pipe.new_run(date(2026, 10, 3)))
+    web = TestClient(create_app(pipe, background=True))
+    url, q = f"/api/run/{run.id}", {"token": run.token}
+
+    s = web.post(url + "/action", params=q, json={"action": "change_section", "start": 6.0, "end": 11.0}).json()
+    assert s["busy"] and s["task"] == "Making the video from 6.0–11.0 s of the song" and s["actions"] == []
+    assert web.post(url + "/action", params=q, json={"action": "continue"}).status_code == 409   # one job at a time
+    s = _wait(web, url, q)
+    assert s["state"] == "built" and s["error"] == "" and s["section"] == [6.0, 11.0]
+    assert pipe.load(run.id).version == 2
+
+    # a job that fails never leaves the run looking busy; the error is shown instead
+    monkeypatch.setattr(pipe, "build", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("disk full")))
+    assert web.post(url + "/action", params=q, json={"action": "regenerate_video"}).status_code == 200
+    s = _wait(web, url, q)
+    assert s["busy"] == "" and "disk full" in s["error"] and "regenerate_video" in s["actions"]

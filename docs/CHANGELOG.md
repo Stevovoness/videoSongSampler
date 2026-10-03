@@ -4,6 +4,14 @@ Every change gets a line here (see the workflow in [CLAUDE.md](../CLAUDE.md)). N
 **Unreleased** until a version is released.
 
 ## Unreleased
+- **Fixed: slow review actions never ran on the real review page.** The page marked the run busy and the job then
+  refused to start because the run was busy, so "Different clips", "Different idea", a different song part,
+  writing and applying text did nothing and the run stayed "Starting…". Jobs now start properly, and one that
+  fails shows its error instead of leaving the run stuck.
+- **You can always see what the review page is doing:** a banner that stays at the top of the screen while you
+  scroll, with a spinner, the job ("Making the video from 55.2–77.2 s of the song…"), the current step, a
+  percentage bar and the time so far; the video is dimmed with "Making a new version…"; the button you pressed
+  says "Working…"; the browser tab shows the progress; and a message pops up when it's done.
 - **Choose a different part of the song** on the review page (any step): pick one of the suggested parts (the
   chorus first, then other parts that repeat, then the start of the song) or type your own start and end, and the
   video is made again from that part. Tick "use this part for this song from now on" to keep it for later runs

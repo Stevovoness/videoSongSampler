@@ -92,7 +92,10 @@ picked -> built -> text_drafted -> final -> approved
            +---------------------------+    skip, expiry and errors end the run)
 ```
 Every change is saved to `runs/<id>/state.json`, so a restart picks the run up where it was. Slow steps run in a
-background thread and the page polls their progress.
+background thread: the server first `claim`s the run (sets `task`, e.g. "Making the video from 55–77 s of the
+song", and `busy`), then `act(..., claimed=True)` does the work while the page polls `busy` (the current step),
+`progress` and `elapsed` and shows them in a banner that stays on screen. A job that fails clears `busy` and sets
+`error`. A server restart clears a job that was cut off.
 
 ### The full design
 Each step either passes something to the next one, or ends the day's run cleanly with a logged reason and a

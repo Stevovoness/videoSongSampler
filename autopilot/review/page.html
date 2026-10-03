@@ -33,8 +33,24 @@ button { font: inherit; padding: 9px 14px; border-radius: 9px; border: 1px solid
          background: var(--card); color: var(--text); cursor: pointer; }
 button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
 button:disabled { opacity: .5; cursor: default; }
-.busy { display: none; }
+.busy { display: none; position: sticky; top: 8px; z-index: 10; border-color: var(--accent);
+        box-shadow: 0 4px 18px rgba(0, 0, 0, .18); }
 .busy.on { display: block; }
+.busy .head { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+.busy .detail { display: flex; justify-content: space-between; gap: 8px; margin: 4px 0 6px; }
+.spinner { width: 18px; height: 18px; flex: none; border-radius: 50%; border: 3px solid var(--line);
+           border-top-color: var(--accent); animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.vwrap { position: relative; }
+.vwrap .veil { display: none; position: absolute; inset: 0; border-radius: 10px; background: rgba(0, 0, 0, .62);
+               color: #fff; align-items: center; justify-content: center; text-align: center; padding: 20px;
+               flex-direction: column; gap: 10px; font-weight: 600; }
+.vwrap.working .veil { display: flex; }
+.toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 20; max-width: 92vw;
+         background: var(--good); color: #fff; padding: 10px 16px; border-radius: 10px; font-weight: 600;
+         box-shadow: 0 4px 18px rgba(0, 0, 0, .25); display: none; }
+.toast.bad { background: var(--bad); }
+.toast.on { display: block; }
 progress { width: 100%; height: 8px; }
 .error { color: var(--bad); white-space: pre-wrap; }
 .judge.ok { color: var(--good); } .judge.flag { color: var(--warn); }
@@ -67,11 +83,20 @@ input[type="checkbox"] { width: auto; }
     <span data-s="final">3 · Final</span><span data-s="approved">✓ Approved</span>
   </div>
 
-  <div class="card busy" id="busy"><div id="busymsg">Working…</div><progress id="bar" max="1" value="0"></progress></div>
+  <div class="card busy" id="busy" role="status" aria-live="polite">
+    <div class="head"><span class="spinner"></span><span id="busytask">Working…</span></div>
+    <div class="detail small muted"><span id="busymsg"></span><span id="busytime"></span></div>
+    <progress id="bar" max="1" value="0"></progress>
+  </div>
+  <div class="toast" id="toast"></div>
   <div class="card error" id="error" hidden></div>
 
   <div class="card" id="videocard" hidden>
-    <video id="video" controls playsinline preload="metadata"></video>
+    <div class="vwrap" id="vwrap">
+      <video id="video" controls playsinline preload="metadata"></video>
+      <div class="veil"><span class="spinner"></span><span id="veilmsg">Making a new version…</span>
+        <span class="small">The old one stays here until the new one is ready.</span></div>
+    </div>
     <div class="muted small" id="videonote"></div>
     <div class="row" id="step1" hidden>
       <button class="primary" data-a="continue">Looks good · write the text →</button>
@@ -128,7 +153,7 @@ input[type="checkbox"] { width: auto; }
 <script>
 const RUN = "__RUN__", TOKEN = "__TOKEN__";
 const api = (p) => `/api/run/${RUN}${p}${p.includes("?") ? "&" : "?"}token=${encodeURIComponent(TOKEN)}`;
-let S = null, shownVersion = "", rowsFor = "", partsFor = "", pollTimer = null;
+let S = null, shownVersion = "", rowsFor = "", partsFor = "", pollTimer = null, tick = null, wasBusy = false;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 
@@ -152,9 +177,7 @@ function render(s) {
   document.querySelectorAll("#steps span").forEach((el, i) => {
     el.className = i === at ? "on" : (at > i ? "done" : "");
   });
-  $("busy").classList.toggle("on", !!s.busy);
-  $("busymsg").textContent = s.busy || "";
-  $("bar").value = s.progress || 0;
+  showBusy(s);
   $("error").hidden = !s.error;
   $("error").textContent = s.error ? `Something went wrong: ${s.error}` : "";
 
@@ -204,8 +227,46 @@ function render(s) {
   $("apply").disabled = $("rewrite").disabled = !!s.busy;
   $("log").textContent = (s.log || []).join("\n");
 
+  if (wasBusy && !s.busy) {          // a job just finished
+    toast(s.error ? "That didn't work: see the message at the top." : "✓ Done: " + doneText(s), !!s.error);
+    if (!s.error) $("videocard").scrollIntoView({behavior: "smooth", block: "start"});
+  }
+  wasBusy = !!s.busy;
   clearTimeout(pollTimer);
   if (s.busy) pollTimer = setTimeout(load, 1500);
+}
+
+function showBusy(s) {
+  const busy = !!s.busy;
+  $("busy").classList.toggle("on", busy);
+  $("vwrap").classList.toggle("working", busy && !!s.videos.base);
+  const pct = Math.round((s.progress || 0) * 100);
+  $("busytask").textContent = (s.task || "Working") + "…";
+  $("veilmsg").textContent = (s.task || "Working") + "…";
+  $("busymsg").textContent = (s.busy || "") + (busy && pct ? ` (${pct}%)` : "");
+  if (s.progress) $("bar").value = s.progress;
+  else $("bar").removeAttribute("value");          // moving bar while the first step has no percentage
+  document.title = busy ? `⏳ ${pct ? pct + "% · " : ""}${s.task || "Working"}` : "Video review";
+  clearInterval(tick);
+  if (busy) {
+    let secs = s.elapsed || 0;
+    const show = () => { $("busytime").textContent = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`; };
+    show();
+    tick = setInterval(() => { secs += 1; show(); }, 1000);
+  }
+}
+
+function doneText(s) {
+  return {built: "the new video is ready to watch.", text_drafted: "the text is ready to check.",
+          final: "the video with the text is ready."}[s.state] || "finished.";
+}
+
+function toast(text, bad = false) {
+  const t = $("toast");
+  t.textContent = text;
+  t.className = "toast on" + (bad ? " bad" : "");
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.className = "toast", 6000);
 }
 
 function pickPart() {
@@ -241,29 +302,37 @@ function readRows() {
   }).filter((o) => o.text);
 }
 
-async function act(action, extra = {}) {
+async function act(action, extra = {}, button = null) {
   document.querySelectorAll("button").forEach((b) => b.disabled = true);
+  if (button) button.textContent = "Working…";
+  // show the job straight away, before the server answers
+  showBusy({...S, busy: "Sending your request…", task: S.task || "Starting", progress: 0, elapsed: 0});
   const r = await fetch(api("/action"), {method: "POST", headers: {"Content-Type": "application/json"},
                                          body: JSON.stringify({action, ...extra})});
-  if (!r.ok) { const e = await r.json().catch(() => ({})); alert(e.detail || "That didn't work."); }
-  else render(await r.json());
+  if (button) button.textContent = button.dataset.label;
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({}));
+    showBusy({...S, busy: ""});
+    toast(e.detail || "That didn't work.", true);
+  } else render(await r.json());
   load();
 }
 
+document.querySelectorAll("button").forEach((b) => b.dataset.label = b.textContent);
 document.querySelectorAll("button[data-a]").forEach((b) => b.onclick = () => {
   if (b.dataset.a === "skip" && !confirm("Skip today's video?")) return;
-  act(b.dataset.a);
+  act(b.dataset.a, {}, b);
 });
 $("addrow").onclick = () => {
   const t = Math.round(($("video").currentTime || 0) * 10) / 10;
   addRow({style: "caption", text: "", start: t, end: Math.round((t + 3) * 10) / 10});
 };
-$("apply").onclick = () => act("apply_text", {overlays: readRows()});
+$("apply").onclick = () => act("apply_text", {overlays: readRows()}, $("apply"));
 $("partpick").onchange = pickPart;
 $("partgo").onclick = () => act("change_section", {start: parseFloat($("pstart").value),
                                                    end: parseFloat($("pend").value),
-                                                   remember: $("premember").checked});
-$("rewrite").onclick = () => act("regenerate_text", {note: $("note").value});
+                                                   remember: $("premember").checked}, $("partgo"));
+$("rewrite").onclick = () => act("regenerate_text", {note: $("note").value}, $("rewrite"));
 $("preview").onclick = async () => {
   await fetch(api("/action"), {method: "POST", headers: {"Content-Type": "application/json"},
                                body: JSON.stringify({action: "save_text", overlays: readRows()})});

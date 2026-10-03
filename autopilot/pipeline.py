@@ -67,7 +67,9 @@ class Run:
     overlays: list[dict] = field(default_factory=list)
     judge: dict = field(default_factory=dict)
     report: dict = field(default_factory=dict)
-    busy: str = ""
+    busy: str = ""                       # what it's doing right now ("" = waiting for you)
+    task: str = ""                       # the job you asked for, e.g. "Making the video from 55–77 s"
+    busy_since: float = 0.0
     progress: float = 0.0
     error: str = ""
     version: int = 0                     # changes whenever a video file changes (for the review page)
@@ -342,10 +344,30 @@ class Pipeline:
         return run
 
     # ------------------------------------------------------------------ actions (from the review page)
-    def act(self, run: Run, action: str, **kw) -> Run:
-        """Run one review action (blocking). Raises InvalidAction if it isn't allowed right now."""
-        if action not in ACTIONS.get(run.state, set()) or run.busy:
+    def describe(self, action: str, **kw) -> str:
+        """The job an action starts, in words for the review page."""
+        if action == "change_section":
+            return f"Making the video from {float(kw['start']):.1f}–{float(kw['end']):.1f} s of the song"
+        return {"continue": "Writing the text", "regenerate_video": "Making the video again with other clips",
+                "regenerate_idea": "Picking another idea and making its video",
+                "regenerate_text": "Writing the text again", "apply_text": "Adding the text to the video",
+                }.get(action, action.replace("_", " ").capitalize())
+
+    def claim(self, run: Run, action: str, **kw) -> Run:
+        """Mark the run busy with `action` before it starts in the background (so the page shows it at once)."""
+        run.task, run.busy, run.busy_since = self.describe(action, **kw), "Starting…", time.time()
+        run.progress, run.error = 0.0, ""
+        self.save(run)
+        return run
+
+    def act(self, run: Run, action: str, claimed: bool = False, **kw) -> Run:
+        """Run one review action (blocking). Raises InvalidAction if it isn't allowed right now.
+        claimed: the run was marked busy for this action by `claim` (don't refuse because of that)."""
+        if action not in ACTIONS.get(run.state, set()) or (run.busy and not claimed):
             raise InvalidAction(f"Can't {action.replace('_', ' ')} while the video is {run.state}.")
+        if not claimed:
+            run.task, run.busy_since = self.describe(action, **kw), time.time()
+        run.error = ""
         try:
             if action == "continue":
                 return self.draft_text(run)

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import secrets
 import threading
+import time
 from pathlib import Path
 
 import cv2
@@ -51,6 +52,8 @@ def create_app(pipe: Pipeline, background: bool = True) -> FastAPI:
         d = pipe.dir(run)
         return {
             "id": run.id, "state": run.state, "busy": run.busy, "progress": run.progress, "error": run.error,
+            "task": run.task if run.busy else "",
+            "elapsed": round(time.time() - run.busy_since) if run.busy and run.busy_since else 0,
             "idea": run.idea, "plan": {k: run.plan.get(k) for k in ("who", "song", "artist", "start", "end", "tier")},
             "themes": [t["name"] for t in run.themes], "coverage": run.report.get("coverage"),
             "parts": [{**pt, "label": part_label(i, pt)} for i, pt in enumerate(run.parts)],
@@ -83,7 +86,8 @@ def create_app(pipe: Pipeline, background: bool = True) -> FastAPI:
             if problem:
                 raise HTTPException(400, problem)
         lock = locks.setdefault(run_id, threading.Lock())
-        if not lock.acquire(blocking=False):
+        # a job clears `busy` just before it lets go of the lock: wait a moment rather than refuse
+        if not lock.acquire(timeout=0.0 if run.busy else 3.0):
             raise HTTPException(409, "Still working on the last request")
         try:
             if name not in run.actions:
@@ -93,20 +97,22 @@ def create_app(pipe: Pipeline, background: bool = True) -> FastAPI:
             lock.release()
             raise HTTPException(409, str(e)) from None
 
-        def work() -> None:
+        def work(claimed: bool) -> None:
             try:
-                pipe.act(pipe.load(run_id), name, **kw)
-            except Exception:  # noqa: BLE001 - saved on the run as its error
-                pass
+                pipe.act(pipe.load(run_id), name, claimed=claimed, **kw)
+            except Exception as e:  # noqa: BLE001 - shown on the page as the run's error
+                failed = pipe.load(run_id)
+                if failed.busy or not failed.error:      # never leave the run looking busy
+                    failed.busy, failed.error = "", failed.error or str(e)
+                    pipe.save(failed)
             finally:
                 lock.release()
 
         if background and not quick:
-            run.busy = "Starting…"
-            pipe.save(run)
-            threading.Thread(target=work, daemon=True).start()
+            pipe.claim(run, name, **kw)                  # the page shows the job straight away
+            threading.Thread(target=work, args=(True,), daemon=True).start()
         else:
-            work()
+            work(False)
         return JSONResponse(view(pipe.load(run_id)))
 
     @app.get("/api/run/{run_id}/frame")
