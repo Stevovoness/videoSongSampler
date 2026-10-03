@@ -259,6 +259,25 @@ The labels describe the video, not how it was made, and don't reduce reach.
 - No slurs, sexual content about real people, or tragedies.
 - Hooks are clickbait about *the video*: curiosity and comedy, not false promises.
 
+**Writer voice** (`writer.py` puts this in its prompt):
+- **"I'm one of you, look at this funny thing."** Write like a viewer sharing a clip with friends, in casual
+  TikTok captions: lower case is fine, "POV", "me when", "nobody: / …", one emoji per line at most.
+- **Never brag about the edit.** Don't write lines like "every note is a real word" or "not one note added".
+  That sounds self-congratulatory. Let the video be the joke.
+- **Gently mock the hyper-patriotism**, especially the ultra-right-wing "freedom" aesthetic. Use its own symbols
+  as the punchline: eagles, fireworks, "FREEDOM", trucks, the uncle at Thanksgiving, 250 years of being loud.
+  Tease the over-the-top vibe, not ordinary people, a group's identity or anyone's looks.
+- **Tie every line to the moment on screen** (the event, the speaker, what the song is doing): the high note, the
+  troops standing behind the speaker, the chorus kicking in.
+- **The call to action sounds like a person:** "ok now imagine your nan doing this. I'll make you one 👇".
+- Avoid flag emoji: they don't show on Windows.
+
+Examples (Marine Corps 250th footage, Yankee Doodle):
+> POV: your uncle hears "250 years" and stands up at dinner 🦅
+> the bald eagle living in my chest rn
+> 250 years and they're STILL this loud 🔊
+> freedom got so loud it went in tune
+
 **Music:**
 - Trending songs are re-performed from a melody MIDI, so no original recording is used.
 - The composition is still the publisher's, so expect claims that share revenue on those posts.

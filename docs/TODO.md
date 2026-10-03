@@ -24,6 +24,12 @@ up (see the workflow in [CLAUDE.md](../CLAUDE.md)). Items marked *(you)* need th
 - [ ] **Choose who sings:** group clips by speaker (face or voice) so a video can be one person singing
 - [ ] Speed up the clip finder's start-up for each part (~40 s before pitch tracking starts)
 - [ ] `interstellar-suite-hans-zimmer.mxl` won't load ("largest tick … likely corrupt"): find out why
+- [x] Faster clip finder in the app: all CPU cores, coarse pitch search plus precise re-measure, reused worker
+      processes, "talking (faster)" mode
+- [x] Save every video's analysis so reopening it (any project, after a restart) is instant
+- [x] `auto` plays every part of the song (chords and bass), not just the tune
+- [x] Writer voice guide in `docs/autopilot.md` (casual, "one of you", gently mocks hyper-patriotism)
+- [ ] Long videos (over 30 minutes) in the app's clip finder: cut them into pieces like `auto` does
 - [ ] **Choose a section of the song in the app** (Step 2): set a start and end (e.g. drag on the piano roll, or
       "chorus only"), so previews and the final render only make that part instead of the whole 4-minute song.
       The engine already supports it (`SongOptions.start_s` / `end_s`, `--start` / `--end` on the command line).

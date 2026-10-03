@@ -4,6 +4,18 @@ Every change gets a line here (see the workflow in [CLAUDE.md](../CLAUDE.md)). N
 **Unreleased** until a version is released.
 
 ## Unreleased
+- **The clip finder is several times faster in the app too.** It uses every CPU core, a coarser pitch search
+  (each found note's pitch is then measured precisely, so tuning is as accurate as before) and one set of worker
+  processes for the whole session. A new **"This video is: singing or playing / talking (faster)"** choice in the
+  clip finder listens over just the speaking-voice range for speeches; the choice is remembered.
+- **Analyses are saved.** Every video's clip-finder result is kept in the app's cache
+  (`%APPDATA%\VideoSampler\cache\finder`), keyed by the file's path, size and date. Opening the same video again,
+  in this project or a new one, even after restarting the app, shows its clip points instantly. `auto` uses the
+  same cache (`clipfinder.analyse_file`).
+- **`auto` plays every part of the song.** Chords and the bass line play too, and in the "only who's singing"
+  layout every clip pops up as its note sounds. `--melody-only` plays just the tune, as before.
+- `docs/autopilot.md` has a **writer voice** guide: casual "one of you" captions that gently mock over-the-top
+  patriotism, tied to what's on screen, never bragging about the edit.
 - **Long speeches work with `auto`.** Videos of any length are cut into ~10-minute pieces first (`media.split_video`,
   no re-encoding, takes seconds), so a 2-hour video no longer needs gigabytes of memory.
 - **Speech is analysed ~25× faster.** `auto` listens over the speaking-voice range (60–600 Hz) with a coarser pitch

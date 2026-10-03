@@ -6,15 +6,12 @@ the clips cover, so a pipeline can reject a poor build before spending time rend
 """
 from __future__ import annotations
 
-import json
-import os
 import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
 from . import clipfinder
-from .clips import SR, load_audio
 from .media import split_video
 from .models import ClipSlot, Project, RenderSettings, Song, SongOptions, Take
 from .notes import midi_to_name
@@ -31,7 +28,7 @@ class AutoOptions:
     min_confidence: float = 0.3      # ignore weaker clip-finder suggestions
     max_takes: int = 4               # clips kept per note (they take turns)
     max_fragment: float | None = None  # cut every clip to at most this many seconds
-    melody_only: bool = True         # play just the tune's top line
+    melody_only: bool = False        # True: play just the tune's top line; False: every part, chords too
     drums: bool = True               # put percussive hits on drum pads when the song has drums
     max_shift: int = 5               # furthest a clip may be pitch-shifted to fill a missing note
     transpose: int | None = None     # None: choose automatically
@@ -78,42 +75,24 @@ def _work_dir(opts: AutoOptions) -> Path:
     return cache_dir() / "auto"
 
 
-def _saved_analysis(piece: str, rng: tuple[float, float]) -> Path:
-    return Path(piece + f".clips-{int(rng[0])}-{int(rng[1])}.json")
-
-
 def find_clips(videos: list[str], progress: ProgressFn = _noop, cancel: threading.Event | None = None,
                opts: AutoOptions | None = None) -> list[tuple[str, clipfinder.Candidate]]:
     """Every clip-finder suggestion in every video, as (video file, candidate).
 
     Long videos are cut into ~10-minute pieces first (`media.split_video`), and the returned clips point into
-    the pieces. Each piece's analysis is saved next to it, so running again (e.g. with another song) is instant.
+    the pieces. Each piece's analysis is saved (`clipfinder.analyse_file`), so running again, with another song
+    or in the app's clip finder, is instant.
     """
     opts = opts or AutoOptions()
-    rng = clipfinder.VOICE_RANGE if opts.voice else clipfinder.FULL_RANGE
-    workers = opts.workers or max(1, (os.cpu_count() or 2) - 1)
+    cache = _work_dir(opts) / "analyses" if opts.work_dir else None
     pieces = [piece for v in videos for piece in split_video(v, _work_dir(opts) / "pieces")]
     found: list[tuple[str, clipfinder.Candidate]] = []
     for n, piece in enumerate(pieces):
         def prog(f: float, m: str, n=n) -> None:
             progress((n + f) / len(pieces), f"Part {n + 1} of {len(pieces)}: {m}")
 
-        saved = _saved_analysis(piece, rng)
-        st = os.stat(piece)
-        stamp = f"{st.st_size}|{st.st_mtime_ns}"
-        data = json.loads(saved.read_text(encoding="utf-8")) if saved.exists() else {}
-        if data.get("stamp") == stamp:
-            cands = [clipfinder.Candidate(**c) for c in data["clips"]]
-        else:
-            audio = load_audio(piece)
-            limit = clipfinder.MAX_MINUTES * 60 * SR
-            res = clipfinder.VOICE_RESOLUTION if opts.voice else 0.1
-            cands = clipfinder.analyse(audio[:, :limit], SR, prog, cancel, rng, workers, res).candidates
-            try:
-                saved.write_text(json.dumps({"stamp": stamp, "clips": [asdict(c) for c in cands]}), encoding="utf-8")
-            except OSError:
-                pass   # e.g. a read-only folder: just don't keep it
-        found += [(piece, c) for c in cands]
+        res = clipfinder.analyse_file(piece, prog, cancel, speech=opts.voice, workers=opts.workers, cache_dir=cache)
+        found += [(piece, c) for c in res.candidates]
     return found
 
 

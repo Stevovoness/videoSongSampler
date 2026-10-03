@@ -19,6 +19,10 @@ Turn short video clips of single notes into a whole song, with a collage music v
 No need to record every note separately. Click **✂ Cut clips from a long video…** in Step 1 (or just add or drop
 any video longer than 10 seconds) and the clip finder listens to the whole thing. It **suggests every clip point at
 once**: each clearly sung or played note (often several takes of the same note) and each slap, clap or knock.
+- For speeches and other talking, set **This video is: talking (faster)**. The app then only listens over the
+  speaking-voice range, which is much quicker. It uses every core of your computer either way.
+- Each video is analysed once: the result is saved, so opening the same video again (even in another project, or
+  after restarting the app) shows its clip points straight away.
 - They're shown on a timeline with the sound wave and the pitch line, and in a list. Untick the ones you don't
   want, drag a clip's edges to trim it, drag its middle to move it, or drag on an empty part of the timeline to
   cut your own.
@@ -78,7 +82,8 @@ picture stays in sync with the sound.
   python main.py auto --videos speech.mp4 --song tune.mid --preset shorts --overlays text.json --out short.mp4
   python main.py render my_song.vsproj out.mp4
   ```
-  `auto` picks the clips, the takes and the key by itself, and writes `short.vsproj` and `short.report.json`
+  `auto` picks the clips, the takes and the key by itself, plays every part of the song (`--melody-only` for
+  just the tune), and writes `short.vsproj` and `short.report.json`
   (how much of the song the clips cover, and where every clip came from). Run `python main.py auto --help` for
   every option. The same works on a Linux server: see `Dockerfile` and [docs/autopilot.md](docs/autopilot.md).
 

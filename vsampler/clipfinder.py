@@ -6,10 +6,13 @@ resize these and turns them into clip slots that point into the long video.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import threading
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Callable
 
 import numpy as np
@@ -29,8 +32,10 @@ PITCH_TOL = 0.5           # semitones a note may wander from its running median
 MAX_HIT = 0.6
 
 FULL_RANGE = (60.0, 4200.0)   # Hz: singing and instruments
-VOICE_RANGE = (60.0, 600.0)   # Hz: speaking voices; pitch tracking is ~4x faster over this narrower range
-VOICE_RESOLUTION = 0.25       # semitones between pitch candidates for speech (0.1 for music): ~6x faster again
+VOICE_RANGE = (60.0, 600.0)   # Hz: speaking voices; pitch tracking is ~3x faster over this narrower range
+RESOLUTION = 0.25             # semitones between the pitches pYIN tries: ~6x faster than its 0.1 default.
+                              # Each found note's pitch is then measured precisely (_fine_pitch).
+ANALYSIS_VERSION = 2          # bump when the results change, so saved analyses are redone
 
 ProgressFn = Callable[[float, str], None]
 
@@ -81,7 +86,31 @@ def _overview(mono: np.ndarray, n: int = 4000) -> np.ndarray:
     return (peaks / top).astype(np.float32) if top > 0 else peaks.astype(np.float32)
 
 
-def _pyin(seg: np.ndarray, fmin: float, fmax: float, resolution: float = 0.1) -> tuple[np.ndarray, np.ndarray]:
+_pool: ProcessPoolExecutor | None = None
+_pool_size = 0
+_pool_lock = threading.Lock()
+
+
+def default_workers() -> int:
+    """Processes for pitch tracking: all but one CPU core."""
+    return max(1, (os.cpu_count() or 2) - 1)
+
+
+def _executor(workers: int) -> ProcessPoolExecutor:
+    """One pool of worker processes, started once and reused: each process takes seconds to start."""
+    global _pool, _pool_size
+    with _pool_lock:
+        if _pool is None or _pool_size != workers:
+            if _pool is not None:
+                _pool.shutdown(wait=False, cancel_futures=True)
+            # one maths thread per process, or the processes fight over the cores (children read these at start)
+            for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS"):
+                os.environ.setdefault(k, "1")
+            _pool, _pool_size = ProcessPoolExecutor(max_workers=workers), workers
+        return _pool
+
+
+def _pyin(seg: np.ndarray, fmin: float, fmax: float, resolution: float = RESOLUTION) -> tuple[np.ndarray, np.ndarray]:
     import librosa
 
     f0, _v, prob = librosa.pyin(seg, fmin=fmin, fmax=fmax, sr=_FR, frame_length=2048, hop_length=_HOP,
@@ -91,7 +120,7 @@ def _pyin(seg: np.ndarray, fmin: float, fmax: float, resolution: float = 0.1) ->
 
 def _pitch_track(y: np.ndarray, progress: ProgressFn, cancel: threading.Event | None,
                  fmin: float = FULL_RANGE[0], fmax: float = FULL_RANGE[1], workers: int = 1,
-                 resolution: float = 0.1):
+                 resolution: float = RESOLUTION):
     n = 1 + len(y) // _HOP
     f0 = np.full(n, np.nan)
     prob = np.zeros(n)
@@ -117,18 +146,16 @@ def _pitch_track(y: np.ndarray, progress: ProgressFn, cancel: threading.Event | 
         progress(0.05 + 0.8 * done / max(1, len(jobs)), f"Listening for notes… {int(100 * done / max(1, len(jobs)))}%")
 
     if workers > 1 and len(jobs) > 1:   # pYIN is pure Python/numpy: separate processes run it in parallel
-        # one maths thread per process, or the processes fight over the cores (the children read these at start)
-        for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS"):
-            os.environ.setdefault(k, "1")
-        with ProcessPoolExecutor(max_workers=min(workers, len(jobs))) as ex:
-            futs = [(s, a, ex.submit(_pyin, y[a: s + chunk + pad], fmin, fmax, resolution)) for s, a in jobs]
-            try:
-                for done, (s, a, fut) in enumerate(futs):
-                    report(done)
-                    store(s, a, *fut.result())
-            except BaseException:
-                ex.shutdown(wait=False, cancel_futures=True)
-                raise
+        ex = _executor(workers)
+        futs = [(s, a, ex.submit(_pyin, y[a: s + chunk + pad], fmin, fmax, resolution)) for s, a in jobs]
+        try:
+            for done, (s, a, fut) in enumerate(futs):
+                report(done)
+                store(s, a, *fut.result())
+        except BaseException:
+            for _s, _a, fut in futs:
+                fut.cancel()
+            raise
     else:
         for done, (s, a) in enumerate(jobs):
             report(done)
@@ -138,12 +165,12 @@ def _pitch_track(y: np.ndarray, progress: ProgressFn, cancel: threading.Event | 
 
 def analyse(audio: np.ndarray, sr: int = SR, progress: ProgressFn = _noop,
             cancel: threading.Event | None = None, pitch_range: tuple[float, float] = FULL_RANGE,
-            workers: int = 1, resolution: float = 0.1) -> FinderResult:
+            workers: int = 1, resolution: float = RESOLUTION) -> FinderResult:
     """Suggest every note and hit clip point in a recording (stereo or mono audio at `sr`).
 
     pitch_range: lowest and highest pitch (Hz) to listen for; VOICE_RANGE is much faster for speech.
     workers: >1 tracks pitch in that many processes at once (for the command line; the window uses 1).
-    resolution: semitones between the pitches pYIN considers; VOICE_RESOLUTION is much faster.
+    resolution: semitones between the pitches pYIN tries (found notes are measured precisely afterwards).
     """
     import librosa
 
@@ -172,6 +199,8 @@ def analyse(audio: np.ndarray, sr: int = SR, progress: ProgressFn = _noop,
     midi_curve = np.where(np.isfinite(midi) & (prob > 0.3) & loud, midi, np.nan)
 
     notes = _find_notes(audio, sr, times, midi, prob, rms, ok, onsets, ref)
+    for c in notes:
+        c.midi = _fine_pitch(y, c.start, c.end, c.midi)
     hits = _find_hits(audio, sr, times, ok, rms, env, onsets, notes)
     cands = sorted(notes + hits, key=lambda c: c.start)
     progress(1.0, "Done")
@@ -266,6 +295,73 @@ def _find_hits(audio, sr, times, ok, rms, env, onsets, notes) -> list[Candidate]
         loud_db = measure_loudness(audio[..., int(t0 * sr): int(t1 * sr)], sr)
         out.append(Candidate(t0, t1, None, "hit", round(float(min(1.0, env[o] / env_ref)), 3), loud_db))
     return out
+
+
+def _fine_pitch(y: np.ndarray, start: float, end: float, coarse: float | None) -> float | None:
+    """The note's pitch measured precisely with YIN near the coarse pitch-tracker reading (median of its frames)."""
+    import librosa
+
+    if coarse is None:
+        return None
+    seg = y[int(start * _FR): int(end * _FR)]
+    if len(seg) < 2048:
+        return coarse
+    lo, hi = 440.0 * 2 ** ((coarse - 1.5 - 69) / 12), 440.0 * 2 ** ((coarse + 1.5 - 69) / 12)
+    f0 = librosa.yin(seg, fmin=lo, fmax=hi, sr=_FR, frame_length=2048, hop_length=_HOP)
+    m = 69.0 + 12.0 * np.log2(f0 / 440.0)
+    m = m[np.abs(m - coarse) < 0.5]
+    return float(np.median(m)) if m.size >= 3 else coarse
+
+
+def _cache_file(path: str, pitch_range: tuple[float, float], cache_dir: str | Path | None) -> Path:
+    if cache_dir is None:
+        from .paths import cache_dir as app_cache
+        cache_dir = app_cache() / "finder"
+    st = os.stat(path)
+    key = f"{os.path.abspath(path)}|{st.st_size}|{st.st_mtime_ns}|{pitch_range}|{ANALYSIS_VERSION}"
+    return Path(cache_dir) / (hashlib.sha1(key.encode()).hexdigest()[:20] + ".npz")
+
+
+def save_result(res: FinderResult, file: str | Path) -> None:
+    Path(file).parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(str(file) + ".tmp.npz")
+    np.savez_compressed(tmp, duration=res.duration, peaks=res.peaks, times=res.times, midi=res.midi, prob=res.prob,
+                        candidates=json.dumps([asdict(c) for c in res.candidates]))
+    os.replace(tmp, file)
+
+
+def load_result(file: str | Path) -> FinderResult:
+    with np.load(file) as d:
+        cands = [Candidate(**c) for c in json.loads(str(d["candidates"]))]
+        return FinderResult(float(d["duration"]), d["peaks"], d["times"], d["midi"], d["prob"], cands)
+
+
+def analyse_file(path: str, progress: ProgressFn = _noop, cancel: threading.Event | None = None,
+                 speech: bool = False, workers: int = 0, cache_dir: str | Path | None = None,
+                 audio: np.ndarray | None = None) -> FinderResult:
+    """`analyse` a video file, reusing the saved result if this exact file was analysed before.
+
+    Results are saved in the app's cache (or cache_dir), keyed by the file's path, size and date, so reopening a
+    video, or using it in another project, is instant. speech: listen over VOICE_RANGE (faster).
+    workers: processes for pitch tracking (0: all but one core).
+    """
+    rng = VOICE_RANGE if speech else FULL_RANGE
+    file = _cache_file(path, rng, cache_dir)
+    if file.exists():
+        try:
+            return load_result(file)
+        except Exception:  # noqa: BLE001 - a damaged cache file is just redone
+            pass
+    if audio is None:
+        from .clips import load_audio
+        progress(0.0, "Reading the video’s sound…")
+        audio = load_audio(path)
+    res = analyse(audio, SR, progress, cancel, rng, workers or default_workers())
+    try:
+        save_result(res, file)
+    except OSError:
+        pass   # can't save (e.g. disk full): it still works, just isn't kept
+    return res
 
 
 def best_takes(cands: list[Candidate]) -> set[int]:

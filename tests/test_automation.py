@@ -182,7 +182,7 @@ def test_parallel_voice_analysis_matches(speech):
     audio = load_audio(path)
     one = clipfinder.analyse(audio, SR, pitch_range=clipfinder.VOICE_RANGE)
     many = clipfinder.analyse(np.concatenate([audio] * 5, axis=1), SR, pitch_range=clipfinder.VOICE_RANGE,
-                              workers=3, resolution=clipfinder.VOICE_RESOLUTION)   # 44 s: several chunks
+                              workers=3)   # 44 s: several chunks
     notes = sorted(round(c.midi) for c in one.candidates if c.kind == "note")
     assert notes == sorted(n for n, _s, _d in NOTES)
     assert sorted(round(c.midi) for c in many.candidates if c.kind == "note") == sorted(notes * 5)
@@ -219,3 +219,41 @@ def test_transpose_prefers_where_the_voice_has_most_takes():
     song = Song("x.mid", "midi", events, [Track(0, "Lead", 12, 60, 65)])
     t = best_transpose(song, SongOptions(), slots)
     assert all(48 <= 60 + k + t <= 55 for k in range(6))    # moved down into the voice's notes
+
+
+# ---------------------------------------------------------------- saved analyses, precise pitch, all parts
+def test_analyse_file_is_saved_and_reused(tmp_path, monkeypatch):
+    video = make_long_clip(tmp_path / "v.mp4", [(60, 0.5, 0.6), (67, 1.6, 0.6)], total=2.8)
+    cache = tmp_path / "cache"
+    first = clipfinder.analyse_file(video, cache_dir=cache, workers=1)
+    assert len(list(cache.glob("*.npz"))) == 1
+    real = clipfinder.analyse
+    monkeypatch.setattr(clipfinder, "analyse", lambda *a, **k: pytest.fail("analysed again"))
+    again = clipfinder.analyse_file(video, cache_dir=cache)
+    assert again.candidates == first.candidates and np.allclose(again.peaks, first.peaks)
+    assert again.duration == pytest.approx(first.duration)
+    monkeypatch.setattr(clipfinder, "analyse", real)
+    clipfinder.analyse_file(video, cache_dir=cache, speech=True, workers=1)    # another mode: its own result
+    assert len(list(cache.glob("*.npz"))) == 2
+    make_long_clip(tmp_path / "v.mp4", [(62, 0.5, 0.6)], total=2.0)        # the file changed: analysed again
+    changed = clipfinder.analyse_file(video, cache_dir=cache, workers=1)
+    assert [round(c.midi) for c in changed.candidates if c.kind == "note"] == [62]
+
+
+def test_found_notes_have_a_precise_pitch(tmp_path):
+    video = make_long_clip(tmp_path / "v.mp4", [(64.1, 0.5, 0.6), (57.62, 1.6, 0.6), (64.37, 2.7, 0.6)], total=3.8)
+    notes = [c for c in clipfinder.analyse(load_audio(video)).candidates if c.kind == "note"]
+    assert [round(c.midi, 2) for c in notes] == pytest.approx([64.1, 57.62, 64.37], abs=0.04)
+
+
+def test_auto_plays_every_part(speech, tmp_path):
+    _d, path, found = speech
+    # a tune with chords: two or three notes at once
+    mid = make_midi(tmp_path / "chords.mid", [(60, 0, 1), (64, 0, 1), (67, 0, 1), (72, 1, 2), (64, 1, 2)])
+    project, song, report = auto_project([path], mid, found=found, opts=AutoOptions(transpose=0))
+    assert report.notes == 5 and report.coverage == 1.0
+    from vsampler.render.renderer import prepare
+    starts = sorted((i.start, i.target) for i in prepare(project, song).plan.note_instances)
+    assert [t for s, t in starts if s < 0.5] == [60, 64, 67]       # all three clips sound together
+    melody, _s, r2 = auto_project([path], mid, found=found, opts=AutoOptions(transpose=0, melody_only=True))
+    assert r2.notes == 2

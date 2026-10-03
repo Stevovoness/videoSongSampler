@@ -23,6 +23,13 @@ The GUI (`vsampler/gui/`) edits a single `Project` held by `AppState`. It listen
   per slot in time order (`NoteInstance.take`), and every take gets its own auto-tune shift.
   `renderer.project_take(project, key, take)` gives the clip for any instance, and `Prepared.sources` is keyed by
   `(slot key, take)`. The compositor keeps one tile per slot and shows whichever take is sounding.
+- **Clip finder speed and cache:** pYIN searches pitches 0.25 semitones apart (`RESOLUTION`, ~6x faster than
+  0.1), and each note it finds is re-measured precisely with YIN around that pitch (`_fine_pitch`). With
+  `workers` > 1 the 30 s chunks run in a process pool that is created once and reused (`_executor`, one maths
+  thread per process). `analyse_file` wraps `analyse` with an on-disk cache: `<cache>/finder/<hash>.npz` (the
+  whole `FinderResult`), keyed by path, size, date, pitch range and `ANALYSIS_VERSION`. Bump `ANALYSIS_VERSION`
+  whenever the results change. The GUI clip finder and `auto.find_clips` both use it. Frozen-exe worker processes
+  re-run `main.py`'s top, which then appends to the log instead of wiping it.
 - **Clip finder:** `clipfinder.analyse` runs pYIN over the whole long video in 30 s chunks and returns a
   `FinderResult` (waveform overview, pitch curve, `Candidate`s). Note candidates are runs of steady, voiced pitch,
   split at onsets so repeated notes become separate takes. Hit candidates are strong onsets with no pitch.
@@ -74,7 +81,7 @@ The GUI (`vsampler/gui/`) edits a single `Project` held by `AppState`. It listen
   The clips point into the pieces, so the renderer never loads a 2-hour sound track. For speech it passes
   `clipfinder.VOICE_RANGE` and `VOICE_RESOLUTION`, and `workers` > 1 runs pYIN's 30 s chunks in a process pool
   (one maths thread each). Each piece's candidates are saved as `<piece>.clips-<fmin>-<fmax>.json`, stamped with
-  the piece's size and date.
+  the piece's size and date (now via `clipfinder.analyse_file`'s cache).
 - **Automatic projects:** `auto.build_slots` groups clip-finder candidates by note (most confident first, then
   takes, optionally cut to `max_fragment`). The loudest hits go on kick, snare and hi-hat. `best_transpose` tries
   -24..24 with `make_plan`, scoring exact 1, octave 0.9 and pitch-shifted 0.5, minus a small penalty for

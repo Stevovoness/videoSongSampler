@@ -8,10 +8,10 @@ from __future__ import annotations
 import dataclasses
 import os
 
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import QSettings, Qt, QTimer, QUrl
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QDialog, QDoubleSpinBox, QFormLayout, QGroupBox,
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QGroupBox,
                                QHBoxLayout, QLabel, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSlider,
                                QSizePolicy, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
@@ -26,7 +26,7 @@ from .screen import preferred_size, scrollable
 from .widgets.timeline import Timeline, item_label
 from .worker import run_task
 
-_RESULTS: dict[str, FinderResult] = {}     # analysis cache for this session, by video path
+_RESULTS: dict[tuple[str, bool], FinderResult] = {}   # this session's analyses, by (video path, speech)
 NOTE_LO, NOTE_HI = 12, 120
 
 
@@ -72,6 +72,17 @@ class ClipFinderDialog(QDialog):
         title.setProperty("h1", True)
         head.addWidget(title)
         head.addStretch(1)
+        head.addWidget(QLabel("This video is"))
+        self.kind = QComboBox()
+        self.kind.addItem("singing or playing", False)
+        self.kind.addItem("talking (faster)", True)
+        self.kind.setToolTip("For speeches and chat, the app only listens over the speaking-voice range, which is "
+                             "much quicker. Pick “singing or playing” for songs, instruments and high voices.")
+        speech = QSettings("VideoSampler", "VideoSampler").value("finder_speech", False, type=bool)
+        self.kind.setCurrentIndex(1 if speech else 0)
+        self.kind.currentIndexChanged.connect(self._kind_changed)
+        head.addWidget(self.kind)
+        head.addSpacing(12)
         self.busy = QProgressBar()
         self.busy.setRange(0, 1000)
         self.busy.setFixedWidth(260)
@@ -252,17 +263,35 @@ class ClipFinderDialog(QDialog):
         self._start()
 
     # ------------------------------------------------------------------ analysis
+    def _kind_changed(self) -> None:
+        QSettings("VideoSampler", "VideoSampler").setValue("finder_speech", bool(self.kind.currentData()))
+        if self.task:
+            self.task.cancel.set()
+            self.task = None
+        # a new analysis gives a new list of suggestions: forget choices made on the old one
+        for d in (self.assign, self.user_tick):
+            d.clear()
+        for st in (self.manual, self.user_made, self.removed, self.added):
+            st.clear()
+        self.sel, self.edit_idx, self.filter = -1, -1, "all"
+        self._start()
+
     def _start(self) -> None:
-        if self.path in _RESULTS:
+        speech = bool(self.kind.currentData())
+        key = (self.path, speech)
+        if key in _RESULTS:
             self.audio = sources.get_audio(self.path)
-            self._analysed(_RESULTS[self.path])
+            self._analysed(_RESULTS[key])
             return
         self.summary.setText("Finding clip points…")
+        self.busy.setVisible(True)
+        self.cancel_btn.setVisible(True)
 
         def job(p, progress=None, cancel=None):
+            # saved analyses (from an earlier session or project) load instantly; new ones use every CPU core
             progress(0.0, "Reading the video’s sound…")
             audio = sources.get_audio(p)
-            return audio, clipfinder.analyse(audio, SR, progress, cancel)
+            return audio, clipfinder.analyse_file(p, progress, cancel, speech=speech, audio=audio)
 
         def prog(f, m):
             self.busy.setValue(int(f * 1000))
@@ -271,7 +300,7 @@ class ClipFinderDialog(QDialog):
         def done(out):
             self.task = None
             self.audio, res = out
-            _RESULTS[self.path] = res
+            _RESULTS[key] = res
             self._analysed(res)
 
         def fail(e, _tb):

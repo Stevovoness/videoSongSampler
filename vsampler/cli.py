@@ -100,7 +100,8 @@ def cmd_auto(a: argparse.Namespace) -> int:
         render.outro = a.outro or ""
         song_opts = SongOptions(start_s=a.start or 0.0, end_s=a.end)
         opts = AutoOptions(max_fragment=a.max_fragment, transpose=a.transpose, drums=not a.no_drums,
-                           voice=not a.full_range, workers=a.workers, work_dir=a.work_dir or "")
+                           voice=not a.full_range, workers=a.workers, work_dir=a.work_dir or "",
+                           melody_only=a.melody_only)
         project, song, report = auto_project(a.videos, a.song, opts, song_opts, render, log.progress())
         project.render.output_path = str(out)
         project.save(out.with_suffix(".vsproj"))
@@ -171,6 +172,8 @@ def parser() -> argparse.ArgumentParser:
     au.add_argument("--min-coverage", type=float, default=0.0,
                     help="don't render if the clips play less than this share of the song (0..1)")
     au.add_argument("--no-drums", action="store_true", help="don't put percussive sounds on drum pads")
+    au.add_argument("--melody-only", action="store_true",
+                    help="play just the tune (by default every part plays, chords too)")
     au.add_argument("--full-range", action="store_true",
                     help="listen for singing / instruments too (slower); the default suits speech")
     au.add_argument("--workers", type=int, default=0, help="processes for pitch tracking (default: CPU cores - 1)")

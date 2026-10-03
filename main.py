@@ -8,7 +8,9 @@ import sys
 if sys.stdout is None or sys.stderr is None:
     _log_dir = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "VideoSampler")
     os.makedirs(_log_dir, exist_ok=True)
-    _log = open(os.path.join(_log_dir, "output.log"), "w", encoding="utf-8", buffering=1)
+    # worker processes (the clip finder's pitch tracking) start this file again: they add to the log, not wipe it
+    _child = any(a.startswith("--multiprocessing") for a in sys.argv)
+    _log = open(os.path.join(_log_dir, "output.log"), "a" if _child else "w", encoding="utf-8", buffering=1)
     if sys.stdout is None:
         sys.stdout = _log
     if sys.stderr is None:
